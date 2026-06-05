@@ -18,7 +18,12 @@ export default function OrderPanel() {
     isLockedOut,
     riskSettings,
     closedTrades,
+    trades,
+    currentIndex,
     calculateMaxShares,
+    isPlaying,
+    pause,
+    play,
   } = useSimulationStore();
   const [quantity, setQuantity] = useState(10);
   const [stopPrice, setStopPrice] = useState<string>("");
@@ -26,6 +31,7 @@ export default function OrderPanel() {
   // Journal modal state
   const [journalMode, setJournalMode] = useState<"entry" | "exit" | null>(null);
   const [pendingAction, setPendingAction] = useState<{ type: "buy" | "sell"; qty: number } | null>(null);
+  const [wasPlaying, setWasPlaying] = useState(false);
 
   const positionValue = position ? position.quantity * currentPrice : 0;
   const totalEquity = cash + positionValue;
@@ -36,11 +42,15 @@ export default function OrderPanel() {
     parsedStop && parsedStop < currentPrice ? calculateMaxShares(parsedStop) : null;
 
   const handleBuy = () => {
+    setWasPlaying(isPlaying);
+    if (isPlaying) pause();
     setPendingAction({ type: "buy", qty: quantity });
     setJournalMode("entry");
   };
 
   const handleSell = () => {
+    setWasPlaying(isPlaying);
+    if (isPlaying) pause();
     setPendingAction({ type: "sell", qty: quantity });
     setJournalMode("exit");
   };
@@ -53,6 +63,7 @@ export default function OrderPanel() {
     }
     setJournalMode(null);
     setPendingAction(null);
+    if (wasPlaying) play();
   };
 
   const handleJournalSkip = () => {
@@ -63,10 +74,28 @@ export default function OrderPanel() {
     }
     setJournalMode(null);
     setPendingAction(null);
+    if (wasPlaying) play();
+  };
+
+  const handleJournalCancel = () => {
+    setJournalMode(null);
+    setPendingAction(null);
+    if (wasPlaying) play();
   };
 
   // Last closed trade for R-multiple display
   const lastClosed = closedTrades.length > 0 ? closedTrades[closedTrades.length - 1] : null;
+
+  // Friction constraints
+  const entryTrades = trades.filter((t) => t.side === "buy");
+  const lastEntry = entryTrades[entryTrades.length - 1];
+  const candlesSinceEntry = lastEntry ? currentIndex - lastEntry.candleIndex : Infinity;
+  const holdBlocked = position && riskSettings.minHoldCandles > 0 && candlesSinceEntry < riskSettings.minHoldCandles;
+  const holdRemaining = holdBlocked ? riskSettings.minHoldCandles - candlesSinceEntry : 0;
+
+  const candlesSinceLastSell = closedTrades.length > 0 ? currentIndex - closedTrades[closedTrades.length - 1].exitCandleIndex : Infinity;
+  const cooldownBlocked = !position && riskSettings.cooldownCandles > 0 && closedTrades.length > 0 && candlesSinceLastSell < riskSettings.cooldownCandles;
+  const cooldownRemaining = cooldownBlocked ? riskSettings.cooldownCandles - candlesSinceLastSell : 0;
 
   return (
     <>
@@ -76,6 +105,7 @@ export default function OrderPanel() {
           mode={journalMode}
           onConfirm={handleJournalConfirm}
           onSkip={handleJournalSkip}
+          onCancel={handleJournalCancel}
         />
       )}
 
@@ -147,19 +177,41 @@ export default function OrderPanel() {
         <div className="grid grid-cols-2 gap-2">
           <button
             onClick={handleBuy}
-            disabled={!isLoaded || currentPrice * quantity > cash || isLockedOut}
+            disabled={!isLoaded || currentPrice * quantity > cash || isLockedOut || !!cooldownBlocked}
             className="bg-green-600 hover:bg-green-500 disabled:bg-slate-600 disabled:cursor-not-allowed text-white py-2 rounded font-semibold transition-colors"
           >
             BUY
           </button>
           <button
             onClick={handleSell}
-            disabled={!isLoaded || !position || position.quantity < quantity}
+            disabled={!isLoaded || !position || position.quantity < quantity || !!holdBlocked}
             className="bg-red-600 hover:bg-red-500 disabled:bg-slate-600 disabled:cursor-not-allowed text-white py-2 rounded font-semibold transition-colors"
           >
             SELL
           </button>
         </div>
+
+        {/* Friction warnings */}
+        {holdBlocked && (
+          <div className="bg-yellow-900/30 border border-yellow-700/50 rounded px-3 py-1.5 text-center">
+            <span className="text-yellow-300 text-[11px]">
+              ⏳ Must hold {holdRemaining} more candle{holdRemaining !== 1 ? "s" : ""} before selling
+            </span>
+          </div>
+        )}
+        {cooldownBlocked && (
+          <div className="bg-purple-900/30 border border-purple-700/50 rounded px-3 py-1.5 text-center">
+            <span className="text-purple-300 text-[11px]">
+              🧊 Cooldown: {cooldownRemaining} candle{cooldownRemaining !== 1 ? "s" : ""} before re-entry
+            </span>
+          </div>
+        )}
+        {riskSettings.spreadBps > 0 && isLoaded && (
+          <div className="text-[10px] text-slate-500 text-center">
+            Spread: buy @ ${(currentPrice * (1 + riskSettings.spreadBps / 10000)).toFixed(2)} • sell @ ${(currentPrice * (1 - riskSettings.spreadBps / 10000)).toFixed(2)}
+            {riskSettings.commissionPerTrade > 0 && ` • $${riskSettings.commissionPerTrade.toFixed(2)} commission`}
+          </div>
+        )}
 
         {/* Account info */}
         <div className="border-t border-slate-700 pt-3 space-y-2 text-sm">

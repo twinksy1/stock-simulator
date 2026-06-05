@@ -1,35 +1,54 @@
 import { create } from "zustand";
-import type { Candle, Trade, ClosedTrade, Position, PlaybackSpeed, RiskSettings, TradeJournal, MistakeType } from "@/types/market";
+import type {
+  Candle,
+  Trade,
+  ClosedTrade,
+  Position,
+  PlaybackSpeed,
+  RiskSettings,
+  TradeJournal,
+  MistakeType,
+  MacroEvent,
+  MarketRegime,
+  CorrelatedSymbol,
+  SessionScore,
+} from "@/types/market";
 
 interface SimulationState {
-  // Session
   symbol: string;
   date: string;
   candles: Candle[];
   currentIndex: number;
-
-  // Playback
   isPlaying: boolean;
   speed: PlaybackSpeed;
-
-  // Trading
   cash: number;
   startingCash: number;
   position: Position | null;
   trades: Trade[];
   closedTrades: ClosedTrade[];
-
-  // Risk management
   riskSettings: RiskSettings;
   realizedPnl: number;
   isLockedOut: boolean;
-
-  // Computed
+  isPendingExecution: boolean;
+  events: MacroEvent[];
+  regimes: { startIndex: number; regime: MarketRegime }[];
+  correlatedSymbols: CorrelatedSymbol[];
+  scarcityMode: boolean;
   currentPrice: number;
   pnl: number;
+  contextEndIndex: number; // where historical context ends and live trading begins
+  isStudyPhase: boolean; // true = user is studying history before going live
 
-  // Actions
-  loadSession: (symbol: string, date: string, candles: Candle[]) => void;
+  loadSession: (
+    symbol: string,
+    date: string,
+    candles: Candle[],
+    events?: MacroEvent[],
+    regimes?: { startIndex: number; regime: MarketRegime }[],
+    correlatedSymbols?: CorrelatedSymbol[],
+    contextEndIndex?: number
+  ) => void;
+  goLive: () => void;
   tick: () => void;
   play: () => void;
   pause: () => void;
@@ -40,6 +59,10 @@ interface SimulationState {
   setRiskSettings: (settings: Partial<RiskSettings>) => void;
   updatePlannedStop: (stop: number | undefined) => void;
   calculateMaxShares: (stopPrice: number) => number;
+  setScarcityMode: (enabled: boolean) => void;
+  getSessionScore: () => SessionScore;
+  getCurrentRegime: () => MarketRegime;
+  getActiveEvent: () => MacroEvent | null;
   reset: () => void;
 }
 
@@ -48,6 +71,11 @@ const STARTING_CASH = 10000;
 const DEFAULT_RISK_SETTINGS: RiskSettings = {
   maxRiskPercent: 2,
   dailyLossLimitPercent: 5,
+  executionDelayMs: 500,
+  minHoldCandles: 3,
+  cooldownCandles: 5,
+  spreadBps: 10, // 0.1% spread
+  commissionPerTrade: 0.65,
 };
 
 function calculatePnl(state: {
@@ -72,52 +100,49 @@ function detectMistakes(
   const mistakes: MistakeType[] = [];
 
   if (side === "buy") {
-    // Revenge trade: last closed trade was a loss AND re-entering within 3 candles
     const lastClosed = closedTrades[closedTrades.length - 1];
-    if (
-      lastClosed &&
-      lastClosed.realizedPnl < 0 &&
-      currentCandleIndex - lastClosed.exitCandleIndex <= 3
-    ) {
+    if (lastClosed && lastClosed.realizedPnl < 0 && currentCandleIndex - lastClosed.exitCandleIndex <= 3) {
       mistakes.push("revenge-trade");
     }
-
-    // FOMO entry: buying after 3+ consecutive green candles
     if (currentCandleIndex >= 3) {
       let consecutiveGreen = 0;
       for (let i = currentCandleIndex; i > Math.max(0, currentCandleIndex - 5); i--) {
-        if (candles[i].close > candles[i].open) {
-          consecutiveGreen++;
-        } else {
-          break;
-        }
+        if (candles[i].close > candles[i].open) consecutiveGreen++;
+        else break;
       }
-      if (consecutiveGreen >= 3) {
-        mistakes.push("fomo-entry");
-      }
+      if (consecutiveGreen >= 3) mistakes.push("fomo-entry");
     }
-
-    // Overtrading: 3+ trades in last 5 candles
-    const recentTrades = trades.filter(
-      (t) => currentCandleIndex - t.candleIndex <= 5
-    );
-    if (recentTrades.length >= 3) {
-      mistakes.push("overtrading");
-    }
+    const recentTrades = trades.filter((t) => currentCandleIndex - t.candleIndex <= 5);
+    if (recentTrades.length >= 3) mistakes.push("overtrading");
   }
 
   if (side === "sell") {
-    // Panic sell: selling immediately after a large red candle (>1% drop)
     if (currentCandleIndex > 0) {
-      const prevCandle = candles[currentCandleIndex];
-      const pctChange = (prevCandle.close - prevCandle.open) / prevCandle.open;
-      if (pctChange < -0.008) {
-        mistakes.push("panic-sell");
-      }
+      const candle = candles[currentCandleIndex];
+      const pctChange = (candle.close - candle.open) / candle.open;
+      if (pctChange < -0.008) mistakes.push("panic-sell");
     }
   }
 
   return mistakes;
+}
+
+function calculateSessionScore(trades: Trade[], closedTrades: ClosedTrade[], currentIndex: number): SessionScore {
+  const tradeDensity = currentIndex > 0 ? trades.length / (currentIndex / 30) : 0;
+  const patienceScore = Math.max(0, Math.min(100, 100 - (tradeDensity - 1) * 30));
+
+  const buyTrades = trades.filter((t) => t.side === "buy");
+  const tradesWithStops = buyTrades.filter((t) => t.plannedStop);
+  const riskScore = buyTrades.length > 0 ? Math.min(100, (tradesWithStops.length / buyTrades.length) * 100) : 100;
+
+  const journaledTrades = trades.filter((t) => t.journal?.thesis || t.journal?.exitReason);
+  const journalScore = trades.length > 0 ? Math.min(100, (journaledTrades.length / trades.length) * 100) : 100;
+
+  const avg = (patienceScore + riskScore + journalScore) / 3;
+  const overallGrade: SessionScore["overallGrade"] =
+    avg >= 90 ? "A" : avg >= 75 ? "B" : avg >= 60 ? "C" : avg >= 40 ? "D" : "F";
+
+  return { patienceScore, riskScore, journalScore, overallGrade };
 }
 
 export const useSimulationStore = create<SimulationState>((set, get) => ({
@@ -135,27 +160,31 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
   riskSettings: DEFAULT_RISK_SETTINGS,
   realizedPnl: 0,
   isLockedOut: false,
+  isPendingExecution: false,
+  events: [],
+  regimes: [],
+  correlatedSymbols: [],
+  scarcityMode: false,
   currentPrice: 0,
   pnl: 0,
+  contextEndIndex: 0,
+  isStudyPhase: false,
 
-  loadSession: (symbol, date, candles) => {
+  loadSession: (symbol, date, candles, events = [], regimes = [], correlatedSymbols = [], contextEndIndex = 0) => {
+    const startIndex = contextEndIndex > 0 ? contextEndIndex : Math.min(50, Math.max(0, candles.length - 1));
     set({
-      symbol,
-      date,
-      candles,
-      currentIndex: 0,
-      isPlaying: false,
-      speed: 1,
-      cash: STARTING_CASH,
-      startingCash: STARTING_CASH,
-      position: null,
-      trades: [],
-      closedTrades: [],
-      realizedPnl: 0,
-      isLockedOut: false,
-      currentPrice: candles.length > 0 ? candles[0].close : 0,
-      pnl: 0,
+      symbol, date, candles, currentIndex: startIndex, isPlaying: false, speed: 1,
+      cash: STARTING_CASH, startingCash: STARTING_CASH, position: null,
+      trades: [], closedTrades: [], realizedPnl: 0, isLockedOut: false,
+      isPendingExecution: false, events, regimes, correlatedSymbols,
+      currentPrice: candles.length > 0 ? candles[startIndex]?.close ?? candles[0].close : 0, pnl: 0,
+      contextEndIndex: startIndex,
+      isStudyPhase: contextEndIndex > 0,
     });
+  },
+
+  goLive: () => {
+    set({ isStudyPhase: false });
   },
 
   tick: () => {
@@ -166,201 +195,145 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
     }
     const nextIndex = currentIndex + 1;
     const price = candles[nextIndex].close;
-    const state = get();
-    const newState = { ...state, currentIndex: nextIndex, currentPrice: price };
-    set({
-      currentIndex: nextIndex,
-      currentPrice: price,
-      pnl: calculatePnl(newState),
-    });
+    const s = get();
+    set({ currentIndex: nextIndex, currentPrice: price, pnl: calculatePnl({ cash: s.cash, startingCash: s.startingCash, position: s.position, currentPrice: price }) });
   },
 
-  play: () => set({ isPlaying: true }),
+  play: () => { if (!get().isStudyPhase) set({ isPlaying: true }); },
   pause: () => set({ isPlaying: false }),
   setSpeed: (speed) => set({ speed }),
 
   jumpTo: (index) => {
-    const { candles } = get();
-    const clamped = Math.max(0, Math.min(index, candles.length - 1));
+    const { candles, isStudyPhase, contextEndIndex } = get();
+    // During study phase, can only scroll within context history
+    const maxIndex = isStudyPhase ? contextEndIndex : candles.length - 1;
+    const clamped = Math.max(0, Math.min(index, maxIndex));
     const price = candles[clamped].close;
-    const state = get();
-    const newState = { ...state, currentIndex: clamped, currentPrice: price };
-    set({
-      currentIndex: clamped,
-      currentPrice: price,
-      pnl: calculatePnl(newState),
-    });
+    const s = get();
+    set({ currentIndex: clamped, currentPrice: price, pnl: calculatePnl({ cash: s.cash, startingCash: s.startingCash, position: s.position, currentPrice: price }) });
   },
 
   buy: (quantity, plannedStop?, journal?) => {
-    const { cash, currentPrice, position, candles, currentIndex, isLockedOut, trades, closedTrades } = get();
-
+    const { cash, currentPrice, isLockedOut, riskSettings, closedTrades, currentIndex, isStudyPhase } = get();
+    if (isStudyPhase) return false;
     if (isLockedOut) return false;
 
-    const cost = currentPrice * quantity;
-    if (cost > cash) return false;
-
-    // Detect mistakes
-    const mistakes = detectMistakes(trades, closedTrades, currentIndex, "buy", candles);
-
-    const newPosition: Position = position
-      ? {
-          ...position,
-          quantity: position.quantity + quantity,
-          avgPrice:
-            (position.avgPrice * position.quantity + cost) /
-            (position.quantity + quantity),
-          plannedStop: plannedStop ?? position.plannedStop,
-        }
-      : { symbol: get().symbol, quantity, avgPrice: currentPrice, plannedStop };
-
-    const trade: Trade = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      side: "buy",
-      price: currentPrice,
-      quantity,
-      time: candles[currentIndex]?.time ?? 0,
-      candleIndex: currentIndex,
-      plannedStop,
-      journal: journal ?? undefined,
-    };
-
-    const newCash = cash - cost;
-    set({
-      cash: newCash,
-      position: newPosition,
-      trades: [...get().trades, trade],
-      pnl: calculatePnl({
-        cash: newCash,
-        startingCash: get().startingCash,
-        position: newPosition,
-        currentPrice,
-      }),
-    });
-
-    // If mistakes detected, store them (will be attached to closed trade later)
-    if (mistakes.length > 0) {
-      // Store on the trade journal
-      const updatedTrades = [...get().trades];
-      const lastTrade = updatedTrades[updatedTrades.length - 1];
-      if (lastTrade) {
-        lastTrade.journal = { ...lastTrade.journal, postNotes: `⚠️ ${mistakes.join(", ")}` };
-        set({ trades: updatedTrades });
-      }
+    // Cooldown check: prevent re-entry too soon after last sell
+    if (riskSettings.cooldownCandles > 0 && closedTrades.length > 0) {
+      const lastClosed = closedTrades[closedTrades.length - 1];
+      if (currentIndex - lastClosed.exitCandleIndex < riskSettings.cooldownCandles) return false;
     }
 
+    // Apply spread: buy at ask (slightly higher)
+    const spreadMultiplier = 1 + (riskSettings.spreadBps / 10000);
+    const askPrice = currentPrice * spreadMultiplier;
+    const totalCost = askPrice * quantity + riskSettings.commissionPerTrade;
+    if (totalCost > cash) return false;
+
+    set({ isPendingExecution: riskSettings.executionDelayMs > 0 });
+
+    const executeTrade = () => {
+      const s = get();
+      const execPrice = s.currentPrice * spreadMultiplier;
+      const execCost = execPrice * quantity + s.riskSettings.commissionPerTrade;
+      if (execCost > s.cash) { set({ isPendingExecution: false }); return; }
+
+      const mistakes = detectMistakes(s.trades, s.closedTrades, s.currentIndex, "buy", s.candles);
+      const newPosition: Position = s.position
+        ? { ...s.position, quantity: s.position.quantity + quantity, avgPrice: (s.position.avgPrice * s.position.quantity + execPrice * quantity) / (s.position.quantity + quantity), plannedStop: plannedStop ?? s.position.plannedStop }
+        : { symbol: s.symbol, quantity, avgPrice: execPrice, plannedStop };
+
+      const trade: Trade = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, side: "buy", price: execPrice, quantity, time: s.candles[s.currentIndex]?.time ?? 0, candleIndex: s.currentIndex, plannedStop, journal: journal ?? undefined };
+      const newCash = s.cash - execCost;
+
+      set({
+        cash: newCash, position: newPosition, trades: [...s.trades, trade], isPendingExecution: false,
+        pnl: calculatePnl({ cash: newCash, startingCash: s.startingCash, position: newPosition, currentPrice: s.currentPrice }),
+      });
+
+      if (mistakes.length > 0) {
+        const updatedTrades = [...get().trades];
+        const lastTrade = updatedTrades[updatedTrades.length - 1];
+        if (lastTrade) { lastTrade.journal = { ...lastTrade.journal, postNotes: `⚠️ ${mistakes.join(", ")}` }; set({ trades: updatedTrades }); }
+      }
+    };
+
+    if (riskSettings.executionDelayMs > 0) setTimeout(executeTrade, riskSettings.executionDelayMs);
+    else executeTrade();
     return true;
   },
 
   sell: (quantity, journal?) => {
-    const { position, cash, currentPrice, candles, currentIndex, trades, closedTrades } = get();
+    const { position, riskSettings, trades, currentIndex, isStudyPhase } = get();
+    if (isStudyPhase) return false;
     if (!position || position.quantity < quantity) return false;
 
-    // Detect mistakes
-    const mistakes = detectMistakes(trades, closedTrades, currentIndex, "sell", candles);
+    // Minimum hold time check
+    if (riskSettings.minHoldCandles > 0) {
+      const entryTrades = trades.filter((t) => t.side === "buy");
+      const lastEntry = entryTrades[entryTrades.length - 1];
+      if (lastEntry && currentIndex - lastEntry.candleIndex < riskSettings.minHoldCandles) return false;
+    }
 
-    const proceeds = currentPrice * quantity;
-    const remaining = position.quantity - quantity;
-    const newPosition: Position | null =
-      remaining > 0 ? { ...position, quantity: remaining } : null;
+    set({ isPendingExecution: riskSettings.executionDelayMs > 0 });
 
-    const tradePnl = (currentPrice - position.avgPrice) * quantity;
-    const newRealizedPnl = get().realizedPnl + tradePnl;
+    const executeTrade = () => {
+      const s = get();
+      if (!s.position || s.position.quantity < quantity) { set({ isPendingExecution: false }); return; }
 
-    // Find the entry trade for this position
-    const entryTrades = trades.filter((t) => t.side === "buy");
-    const lastEntry = entryTrades[entryTrades.length - 1];
+      const mistakes = detectMistakes(s.trades, s.closedTrades, s.currentIndex, "sell", s.candles);
+      // Apply spread: sell at bid (slightly lower)
+      const spreadMultiplier = 1 - (s.riskSettings.spreadBps / 10000);
+      const execPrice = s.currentPrice * spreadMultiplier;
+      const proceeds = execPrice * quantity - s.riskSettings.commissionPerTrade;
+      const remaining = s.position.quantity - quantity;
+      const newPosition: Position | null = remaining > 0 ? { ...s.position, quantity: remaining } : null;
+      const tradePnl = (execPrice - s.position.avgPrice) * quantity - (s.riskSettings.commissionPerTrade * 2); // account for both sides
+      const newRealizedPnl = s.realizedPnl + tradePnl;
 
-    const closedTrade: ClosedTrade = {
-      id: `closed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      symbol: get().symbol,
-      entryPrice: position.avgPrice,
-      exitPrice: currentPrice,
-      quantity,
-      entryTime: lastEntry?.time ?? 0,
-      exitTime: candles[currentIndex]?.time ?? 0,
-      entryCandleIndex: lastEntry?.candleIndex ?? 0,
-      exitCandleIndex: currentIndex,
-      plannedStop: position.plannedStop,
-      rMultiple: position.plannedStop
-        ? (currentPrice - position.avgPrice) / (position.avgPrice - position.plannedStop)
-        : null,
-      realizedPnl: tradePnl,
-      journal,
-      mistakes,
+      const entryTrades = s.trades.filter((t) => t.side === "buy");
+      const lastEntry = entryTrades[entryTrades.length - 1];
+
+      const closedTrade: ClosedTrade = {
+        id: `closed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, symbol: s.symbol,
+        entryPrice: s.position.avgPrice, exitPrice: execPrice, quantity,
+        entryTime: lastEntry?.time ?? 0, exitTime: s.candles[s.currentIndex]?.time ?? 0,
+        entryCandleIndex: lastEntry?.candleIndex ?? 0, exitCandleIndex: s.currentIndex,
+        plannedStop: s.position.plannedStop,
+        rMultiple: s.position.plannedStop ? (execPrice - s.position.avgPrice) / (s.position.avgPrice - s.position.plannedStop) : null,
+        realizedPnl: tradePnl, journal, mistakes,
+        holdDuration: s.currentIndex - (lastEntry?.candleIndex ?? 0),
+        regime: s.regimes.length > 0 ? s.regimes.reduce((c, r) => r.startIndex <= s.currentIndex ? r : c, s.regimes[0]).regime : undefined,
+      };
+
+      const trade: Trade = { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, side: "sell", price: execPrice, quantity, time: s.candles[s.currentIndex]?.time ?? 0, candleIndex: s.currentIndex, journal };
+      const newCash = s.cash + proceeds;
+      const lossLimit = (s.riskSettings.dailyLossLimitPercent / 100) * s.startingCash;
+
+      set({
+        cash: newCash, position: newPosition, trades: [...s.trades, trade],
+        closedTrades: [...s.closedTrades, closedTrade], realizedPnl: newRealizedPnl,
+        isLockedOut: newRealizedPnl <= -lossLimit, isPendingExecution: false,
+        pnl: calculatePnl({ cash: newCash, startingCash: s.startingCash, position: newPosition, currentPrice: s.currentPrice }),
+      });
     };
 
-    const trade: Trade = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      side: "sell",
-      price: currentPrice,
-      quantity,
-      time: candles[currentIndex]?.time ?? 0,
-      candleIndex: currentIndex,
-      journal,
-    };
-
-    const newCash = cash + proceeds;
-
-    const { riskSettings, startingCash } = get();
-    const lossLimit = (riskSettings.dailyLossLimitPercent / 100) * startingCash;
-    const hitLimit = newRealizedPnl <= -lossLimit;
-
-    set({
-      cash: newCash,
-      position: newPosition,
-      trades: [...get().trades, trade],
-      closedTrades: [...get().closedTrades, closedTrade],
-      realizedPnl: newRealizedPnl,
-      isLockedOut: hitLimit,
-      pnl: calculatePnl({
-        cash: newCash,
-        startingCash: get().startingCash,
-        position: newPosition,
-        currentPrice,
-      }),
-    });
+    if (riskSettings.executionDelayMs > 0) setTimeout(executeTrade, riskSettings.executionDelayMs);
+    else executeTrade();
     return true;
   },
 
-  setRiskSettings: (settings) => {
-    set({ riskSettings: { ...get().riskSettings, ...settings } });
-  },
-
-  updatePlannedStop: (stop) => {
-    const { position } = get();
-    if (!position) return;
-    set({ position: { ...position, plannedStop: stop } });
-  },
-
+  setRiskSettings: (settings) => set({ riskSettings: { ...get().riskSettings, ...settings } }),
+  updatePlannedStop: (stop) => { const { position } = get(); if (position) set({ position: { ...position, plannedStop: stop } }); },
   calculateMaxShares: (stopPrice) => {
     const { currentPrice, cash, startingCash, riskSettings } = get();
     if (stopPrice >= currentPrice) return 0;
-    const riskPerShare = currentPrice - stopPrice;
     const maxRiskDollars = (riskSettings.maxRiskPercent / 100) * startingCash;
-    const maxFromRisk = Math.floor(maxRiskDollars / riskPerShare);
-    const maxFromCash = Math.floor(cash / currentPrice);
-    return Math.min(maxFromRisk, maxFromCash);
+    return Math.min(Math.floor(maxRiskDollars / (currentPrice - stopPrice)), Math.floor(cash / currentPrice));
   },
-
-  reset: () => {
-    set({
-      symbol: "",
-      date: "",
-      candles: [],
-      currentIndex: 0,
-      isPlaying: false,
-      speed: 1,
-      cash: STARTING_CASH,
-      startingCash: STARTING_CASH,
-      position: null,
-      trades: [],
-      closedTrades: [],
-      riskSettings: DEFAULT_RISK_SETTINGS,
-      realizedPnl: 0,
-      isLockedOut: false,
-      currentPrice: 0,
-      pnl: 0,
-    });
-  },
+  setScarcityMode: (enabled) => set({ scarcityMode: enabled }),
+  getSessionScore: () => { const { trades, closedTrades, currentIndex } = get(); return calculateSessionScore(trades, closedTrades, currentIndex); },
+  getCurrentRegime: () => { const { regimes, currentIndex } = get(); if (regimes.length === 0) return "choppy"; return regimes.reduce((c, r) => r.startIndex <= currentIndex ? r : c, regimes[0]).regime; },
+  getActiveEvent: () => { const { events, currentIndex } = get(); return events.find((e) => e.candleIndex <= currentIndex && currentIndex - e.candleIndex < 5) ?? null; },
+  reset: () => set({ symbol: "", date: "", candles: [], currentIndex: 0, isPlaying: false, speed: 1, cash: STARTING_CASH, startingCash: STARTING_CASH, position: null, trades: [], closedTrades: [], riskSettings: DEFAULT_RISK_SETTINGS, realizedPnl: 0, isLockedOut: false, isPendingExecution: false, events: [], regimes: [], correlatedSymbols: [], scarcityMode: false, currentPrice: 0, pnl: 0, contextEndIndex: 0, isStudyPhase: false }),
 }));

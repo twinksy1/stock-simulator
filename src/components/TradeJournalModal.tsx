@@ -21,9 +21,10 @@ interface TradeJournalModalProps {
   mode: "entry" | "exit";
   onConfirm: (journal: TradeJournal) => void;
   onSkip: () => void;
+  onCancel: () => void;
 }
 
-export default function TradeJournalModal({ mode, onConfirm, onSkip }: TradeJournalModalProps) {
+export default function TradeJournalModal({ mode, onConfirm, onSkip, onCancel }: TradeJournalModalProps) {
   const [thesis, setThesis] = useState("");
   const [confidence, setConfidence] = useState<Confidence>(3);
   const [setupLabel, setSetupLabel] = useState<SetupLabel | "">("");
@@ -163,6 +164,12 @@ export default function TradeJournalModal({ mode, onConfirm, onSkip }: TradeJour
             className="px-4 bg-slate-700 hover:bg-slate-600 text-slate-300 py-2 rounded transition-colors text-sm"
           >
             Skip
+          </button>
+          <button
+            onClick={onCancel}
+            className="px-4 bg-red-900/50 hover:bg-red-800/50 text-red-300 py-2 rounded transition-colors text-sm border border-red-700/50"
+          >
+            Cancel
           </button>
         </div>
       </div>

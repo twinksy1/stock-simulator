@@ -52,6 +52,13 @@ export default function ChartWithIndicators() {
       layout: { background: { color: "#0f172a" }, textColor: "#94a3b8" },
       grid: { vertLines: { color: "#1e293b" }, horzLines: { color: "#1e293b" } },
       timeScale: { timeVisible: true, secondsVisible: false },
+      localization: {
+        timeFormatter: (time: number) => {
+          const d = new Date(time * 1000);
+          return d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: true });
+        },
+        dateFormat: "HH:mm",
+      },
     };
 
     // Main chart

@@ -151,6 +151,12 @@ export default function TradeHistory() {
                   </span>
                 )}
 
+                {/* Hold duration and regime */}
+                <div className="flex gap-2 mt-1 text-[10px] text-slate-500">
+                  {ct.holdDuration > 0 && <span>⏱️ {ct.holdDuration} candles</span>}
+                  {ct.regime && <span>📊 {ct.regime}</span>}
+                </div>
+
                 {/* Mistakes */}
                 {ct.mistakes.length > 0 && (
                   <div className="flex gap-1 mt-1 flex-wrap">
