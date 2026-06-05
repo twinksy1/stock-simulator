@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Candle, Trade, Position, PlaybackSpeed } from "@/types/market";
+import type { Candle, Trade, ClosedTrade, Position, PlaybackSpeed, RiskSettings } from "@/types/market";
 
 interface SimulationState {
   // Session
@@ -17,6 +17,12 @@ interface SimulationState {
   startingCash: number;
   position: Position | null;
   trades: Trade[];
+  closedTrades: ClosedTrade[];
+
+  // Risk management
+  riskSettings: RiskSettings;
+  realizedPnl: number;
+  isLockedOut: boolean;
 
   // Computed
   currentPrice: number;
@@ -29,12 +35,20 @@ interface SimulationState {
   pause: () => void;
   setSpeed: (speed: PlaybackSpeed) => void;
   jumpTo: (index: number) => void;
-  buy: (quantity: number) => void;
-  sell: (quantity: number) => void;
+  buy: (quantity: number, plannedStop?: number) => boolean;
+  sell: (quantity: number) => boolean;
+  setRiskSettings: (settings: Partial<RiskSettings>) => void;
+  updatePlannedStop: (stop: number | undefined) => void;
+  calculateMaxShares: (stopPrice: number) => number;
   reset: () => void;
 }
 
 const STARTING_CASH = 10000;
+
+const DEFAULT_RISK_SETTINGS: RiskSettings = {
+  maxRiskPercent: 2,
+  dailyLossLimitPercent: 5,
+};
 
 function calculatePnl(state: {
   cash: number;
@@ -59,6 +73,10 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
   startingCash: STARTING_CASH,
   position: null,
   trades: [],
+  closedTrades: [],
+  riskSettings: DEFAULT_RISK_SETTINGS,
+  realizedPnl: 0,
+  isLockedOut: false,
   currentPrice: 0,
   pnl: 0,
 
@@ -74,6 +92,9 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
       startingCash: STARTING_CASH,
       position: null,
       trades: [],
+      closedTrades: [],
+      realizedPnl: 0,
+      isLockedOut: false,
       currentPrice: candles.length > 0 ? candles[0].close : 0,
       pnl: 0,
     });
@@ -113,10 +134,14 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
     });
   },
 
-  buy: (quantity) => {
-    const { cash, currentPrice, position, candles, currentIndex } = get();
+  buy: (quantity, plannedStop?) => {
+    const { cash, currentPrice, position, candles, currentIndex, isLockedOut } = get();
+
+    // Block trades if locked out
+    if (isLockedOut) return false;
+
     const cost = currentPrice * quantity;
-    if (cost > cash) return; // insufficient funds
+    if (cost > cash) return false;
 
     const newPosition: Position = position
       ? {
@@ -125,8 +150,9 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
           avgPrice:
             (position.avgPrice * position.quantity + cost) /
             (position.quantity + quantity),
+          plannedStop: plannedStop ?? position.plannedStop,
         }
-      : { symbol: get().symbol, quantity, avgPrice: currentPrice };
+      : { symbol: get().symbol, quantity, avgPrice: currentPrice, plannedStop };
 
     const trade: Trade = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -134,6 +160,8 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
       price: currentPrice,
       quantity,
       time: candles[currentIndex]?.time ?? 0,
+      candleIndex: currentIndex,
+      plannedStop,
     };
 
     const newCash = cash - cost;
@@ -148,16 +176,39 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
         currentPrice,
       }),
     });
+    return true;
   },
 
   sell: (quantity) => {
     const { position, cash, currentPrice, candles, currentIndex } = get();
-    if (!position || position.quantity < quantity) return; // nothing to sell
+    if (!position || position.quantity < quantity) return false;
 
     const proceeds = currentPrice * quantity;
     const remaining = position.quantity - quantity;
     const newPosition: Position | null =
       remaining > 0 ? { ...position, quantity: remaining } : null;
+
+    // Calculate realized P&L for this sale
+    const tradePnl = (currentPrice - position.avgPrice) * quantity;
+    const newRealizedPnl = get().realizedPnl + tradePnl;
+
+    // Record closed trade
+    const closedTrade: ClosedTrade = {
+      id: `closed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      symbol: get().symbol,
+      entryPrice: position.avgPrice,
+      exitPrice: currentPrice,
+      quantity,
+      entryTime: 0, // simplified — would need entry trade lookup for exact time
+      exitTime: candles[currentIndex]?.time ?? 0,
+      entryCandleIndex: 0,
+      exitCandleIndex: currentIndex,
+      plannedStop: position.plannedStop,
+      rMultiple: position.plannedStop
+        ? (currentPrice - position.avgPrice) / (position.avgPrice - position.plannedStop)
+        : null,
+      realizedPnl: tradePnl,
+    };
 
     const trade: Trade = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -165,13 +216,23 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
       price: currentPrice,
       quantity,
       time: candles[currentIndex]?.time ?? 0,
+      candleIndex: currentIndex,
     };
 
     const newCash = cash + proceeds;
+
+    // Check daily loss limit
+    const { riskSettings, startingCash } = get();
+    const lossLimit = (riskSettings.dailyLossLimitPercent / 100) * startingCash;
+    const hitLimit = newRealizedPnl <= -lossLimit;
+
     set({
       cash: newCash,
       position: newPosition,
       trades: [...get().trades, trade],
+      closedTrades: [...get().closedTrades, closedTrade],
+      realizedPnl: newRealizedPnl,
+      isLockedOut: hitLimit,
       pnl: calculatePnl({
         cash: newCash,
         startingCash: get().startingCash,
@@ -179,6 +240,27 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
         currentPrice,
       }),
     });
+    return true;
+  },
+
+  setRiskSettings: (settings) => {
+    set({ riskSettings: { ...get().riskSettings, ...settings } });
+  },
+
+  updatePlannedStop: (stop) => {
+    const { position } = get();
+    if (!position) return;
+    set({ position: { ...position, plannedStop: stop } });
+  },
+
+  calculateMaxShares: (stopPrice) => {
+    const { currentPrice, cash, startingCash, riskSettings } = get();
+    if (stopPrice >= currentPrice) return 0;
+    const riskPerShare = currentPrice - stopPrice;
+    const maxRiskDollars = (riskSettings.maxRiskPercent / 100) * startingCash;
+    const maxFromRisk = Math.floor(maxRiskDollars / riskPerShare);
+    const maxFromCash = Math.floor(cash / currentPrice);
+    return Math.min(maxFromRisk, maxFromCash);
   },
 
   reset: () => {
@@ -193,6 +275,10 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
       startingCash: STARTING_CASH,
       position: null,
       trades: [],
+      closedTrades: [],
+      riskSettings: DEFAULT_RISK_SETTINGS,
+      realizedPnl: 0,
+      isLockedOut: false,
       currentPrice: 0,
       pnl: 0,
     });

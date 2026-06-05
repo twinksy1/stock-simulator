@@ -8,7 +8,7 @@ import SessionSetup from "@/components/SessionSetup";
 import IndicatorToolbar from "@/components/IndicatorToolbar";
 
 export default function Home() {
-  const { symbol, date, candles, trades } = useSimulationStore();
+  const { symbol, candles, trades } = useSimulationStore();
   const isSessionActive = candles.length > 0;
 
   return (
@@ -32,8 +32,6 @@ export default function Home() {
               <span className="bg-slate-700 px-3 py-1 rounded font-mono font-bold">
                 {symbol}
               </span>
-              <span className="text-slate-400">{date}</span>
-              <span className="text-slate-500">|</span>
               <span className="text-slate-400">{trades.length} trades</span>
               <button
                 onClick={() => useSimulationStore.getState().reset()}
