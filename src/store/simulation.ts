@@ -90,6 +90,14 @@ function calculatePnl(state: {
   return state.cash + positionValue - state.startingCash;
 }
 
+function isMarketHours(candles: Candle[], currentIndex: number): boolean {
+  const candle = candles[currentIndex];
+  if (!candle) return false;
+  const d = new Date(candle.time * 1000);
+  const hours = d.getHours() + d.getMinutes() / 60;
+  return hours >= 9.5 && hours < 16; // 9:30 AM to 4:00 PM
+}
+
 function detectMistakes(
   trades: Trade[],
   closedTrades: ClosedTrade[],
@@ -214,9 +222,10 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
   },
 
   buy: (quantity, plannedStop?, journal?) => {
-    const { cash, currentPrice, isLockedOut, riskSettings, closedTrades, currentIndex, isStudyPhase } = get();
+    const { cash, currentPrice, isLockedOut, riskSettings, closedTrades, currentIndex, isStudyPhase, candles } = get();
     if (isStudyPhase) return false;
     if (isLockedOut) return false;
+    if (!isMarketHours(candles, currentIndex)) return false;
 
     // Cooldown check: prevent re-entry too soon after last sell
     if (riskSettings.cooldownCandles > 0 && closedTrades.length > 0) {
@@ -264,8 +273,9 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
   },
 
   sell: (quantity, journal?) => {
-    const { position, riskSettings, trades, currentIndex, isStudyPhase } = get();
+    const { position, riskSettings, trades, currentIndex, isStudyPhase, candles } = get();
     if (isStudyPhase) return false;
+    if (!isMarketHours(candles, currentIndex)) return false;
     if (!position || position.quantity < quantity) return false;
 
     // Minimum hold time check

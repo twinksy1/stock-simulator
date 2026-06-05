@@ -37,6 +37,11 @@ export default function OrderPanel() {
   const totalEquity = cash + positionValue;
   const isLoaded = candles.length > 0;
 
+  // Market hours check
+  const currentCandle = candles[currentIndex];
+  const currentHour = currentCandle ? new Date(currentCandle.time * 1000).getHours() + new Date(currentCandle.time * 1000).getMinutes() / 60 : 0;
+  const isOutsideMarketHours = isLoaded && (currentHour < 9.5 || currentHour >= 16);
+
   const parsedStop = stopPrice ? parseFloat(stopPrice) : undefined;
   const maxShares =
     parsedStop && parsedStop < currentPrice ? calculateMaxShares(parsedStop) : null;
@@ -177,19 +182,28 @@ export default function OrderPanel() {
         <div className="grid grid-cols-2 gap-2">
           <button
             onClick={handleBuy}
-            disabled={!isLoaded || currentPrice * quantity > cash || isLockedOut || !!cooldownBlocked}
+            disabled={!isLoaded || isOutsideMarketHours || currentPrice * quantity > cash || isLockedOut || !!cooldownBlocked}
             className="bg-green-600 hover:bg-green-500 disabled:bg-slate-600 disabled:cursor-not-allowed text-white py-2 rounded font-semibold transition-colors"
           >
             BUY
           </button>
           <button
             onClick={handleSell}
-            disabled={!isLoaded || !position || position.quantity < quantity || !!holdBlocked}
+            disabled={!isLoaded || isOutsideMarketHours || !position || position.quantity < quantity || !!holdBlocked}
             className="bg-red-600 hover:bg-red-500 disabled:bg-slate-600 disabled:cursor-not-allowed text-white py-2 rounded font-semibold transition-colors"
           >
             SELL
           </button>
         </div>
+
+        {/* Market hours warning */}
+        {isOutsideMarketHours && (
+          <div className="bg-slate-700/50 border border-slate-600 rounded px-3 py-1.5 text-center">
+            <span className="text-slate-400 text-[11px]">
+              🌙 Market closed — trading resumes at 9:30 AM ET
+            </span>
+          </div>
+        )}
 
         {/* Friction warnings */}
         {holdBlocked && (

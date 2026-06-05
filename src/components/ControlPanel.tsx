@@ -33,10 +33,11 @@ export default function ControlPanel() {
   const currentCandle = candles[currentIndex];
   const currentTime = currentCandle
     ? new Date(currentCandle.time * 1000).toLocaleTimeString("en-US", {
-        hour: "2-digit",
+        hour: "numeric",
         minute: "2-digit",
         hour12: true,
-      })
+        timeZone: "America/New_York",
+      }) + " ET"
     : "--:--";
 
   // Determine which day we're on (multi-day support)
