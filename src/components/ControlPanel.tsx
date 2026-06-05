@@ -46,8 +46,10 @@ export default function ControlPanel() {
   const dayNumber = Math.floor((currentTimestamp - firstTime) / 86400) + 1;
   const totalDays = candles.length > 0 ? Math.floor((candles[candles.length - 1].time - firstTime) / 86400) + 1 : 1;
 
-  // Determine market session (pre-market, market, after-hours)
-  const hour = currentCandle ? new Date(currentCandle.time * 1000).getHours() + new Date(currentCandle.time * 1000).getMinutes() / 60 : 0;
+  // Determine market session using Eastern Time
+  const etTimeStr = currentCandle ? new Date(currentCandle.time * 1000).toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" }) : "00:00";
+  const [etH, etM] = etTimeStr.split(":").map(Number);
+  const hour = etH + etM / 60;
   const sessionLabel = hour < 9.5 ? "Pre-Market" : hour >= 16 ? "After-Hours" : "Market Hours";
   const sessionColor = hour < 9.5 ? "text-purple-400" : hour >= 16 ? "text-orange-400" : "text-green-400";
 

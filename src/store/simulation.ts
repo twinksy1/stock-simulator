@@ -94,8 +94,11 @@ function isMarketHours(candles: Candle[], currentIndex: number): boolean {
   const candle = candles[currentIndex];
   if (!candle) return false;
   const d = new Date(candle.time * 1000);
-  const hours = d.getHours() + d.getMinutes() / 60;
-  return hours >= 9.5 && hours < 16; // 9:30 AM to 4:00 PM
+  // Use Eastern Time for market hours check
+  const etTime = d.toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" });
+  const [h, m] = etTime.split(":").map(Number);
+  const hours = h + m / 60;
+  return hours >= 9.5 && hours < 16; // 9:30 AM to 4:00 PM ET
 }
 
 function detectMistakes(

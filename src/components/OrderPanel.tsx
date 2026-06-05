@@ -37,9 +37,11 @@ export default function OrderPanel() {
   const totalEquity = cash + positionValue;
   const isLoaded = candles.length > 0;
 
-  // Market hours check
+  // Market hours check (Eastern Time)
   const currentCandle = candles[currentIndex];
-  const currentHour = currentCandle ? new Date(currentCandle.time * 1000).getHours() + new Date(currentCandle.time * 1000).getMinutes() / 60 : 0;
+  const etTimeStr = currentCandle ? new Date(currentCandle.time * 1000).toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" }) : "00:00";
+  const [etH, etM] = etTimeStr.split(":").map(Number);
+  const currentHour = etH + etM / 60;
   const isOutsideMarketHours = isLoaded && (currentHour < 9.5 || currentHour >= 16);
 
   const parsedStop = stopPrice ? parseFloat(stopPrice) : undefined;
