@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Candle, Trade, ClosedTrade, Position, PlaybackSpeed, RiskSettings } from "@/types/market";
+import type { Candle, Trade, ClosedTrade, Position, PlaybackSpeed, RiskSettings, TradeJournal, MistakeType } from "@/types/market";
 
 interface SimulationState {
   // Session
@@ -35,8 +35,8 @@ interface SimulationState {
   pause: () => void;
   setSpeed: (speed: PlaybackSpeed) => void;
   jumpTo: (index: number) => void;
-  buy: (quantity: number, plannedStop?: number) => boolean;
-  sell: (quantity: number) => boolean;
+  buy: (quantity: number, plannedStop?: number, journal?: TradeJournal) => boolean;
+  sell: (quantity: number, journal?: TradeJournal) => boolean;
   setRiskSettings: (settings: Partial<RiskSettings>) => void;
   updatePlannedStop: (stop: number | undefined) => void;
   calculateMaxShares: (stopPrice: number) => number;
@@ -60,6 +60,64 @@ function calculatePnl(state: {
     ? state.position.quantity * state.currentPrice
     : 0;
   return state.cash + positionValue - state.startingCash;
+}
+
+function detectMistakes(
+  trades: Trade[],
+  closedTrades: ClosedTrade[],
+  currentCandleIndex: number,
+  side: "buy" | "sell",
+  candles: Candle[]
+): MistakeType[] {
+  const mistakes: MistakeType[] = [];
+
+  if (side === "buy") {
+    // Revenge trade: last closed trade was a loss AND re-entering within 3 candles
+    const lastClosed = closedTrades[closedTrades.length - 1];
+    if (
+      lastClosed &&
+      lastClosed.realizedPnl < 0 &&
+      currentCandleIndex - lastClosed.exitCandleIndex <= 3
+    ) {
+      mistakes.push("revenge-trade");
+    }
+
+    // FOMO entry: buying after 3+ consecutive green candles
+    if (currentCandleIndex >= 3) {
+      let consecutiveGreen = 0;
+      for (let i = currentCandleIndex; i > Math.max(0, currentCandleIndex - 5); i--) {
+        if (candles[i].close > candles[i].open) {
+          consecutiveGreen++;
+        } else {
+          break;
+        }
+      }
+      if (consecutiveGreen >= 3) {
+        mistakes.push("fomo-entry");
+      }
+    }
+
+    // Overtrading: 3+ trades in last 5 candles
+    const recentTrades = trades.filter(
+      (t) => currentCandleIndex - t.candleIndex <= 5
+    );
+    if (recentTrades.length >= 3) {
+      mistakes.push("overtrading");
+    }
+  }
+
+  if (side === "sell") {
+    // Panic sell: selling immediately after a large red candle (>1% drop)
+    if (currentCandleIndex > 0) {
+      const prevCandle = candles[currentCandleIndex];
+      const pctChange = (prevCandle.close - prevCandle.open) / prevCandle.open;
+      if (pctChange < -0.008) {
+        mistakes.push("panic-sell");
+      }
+    }
+  }
+
+  return mistakes;
 }
 
 export const useSimulationStore = create<SimulationState>((set, get) => ({
@@ -134,14 +192,16 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
     });
   },
 
-  buy: (quantity, plannedStop?) => {
-    const { cash, currentPrice, position, candles, currentIndex, isLockedOut } = get();
+  buy: (quantity, plannedStop?, journal?) => {
+    const { cash, currentPrice, position, candles, currentIndex, isLockedOut, trades, closedTrades } = get();
 
-    // Block trades if locked out
     if (isLockedOut) return false;
 
     const cost = currentPrice * quantity;
     if (cost > cash) return false;
+
+    // Detect mistakes
+    const mistakes = detectMistakes(trades, closedTrades, currentIndex, "buy", candles);
 
     const newPosition: Position = position
       ? {
@@ -162,6 +222,7 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
       time: candles[currentIndex]?.time ?? 0,
       candleIndex: currentIndex,
       plannedStop,
+      journal: journal ?? undefined,
     };
 
     const newCash = cash - cost;
@@ -176,38 +237,57 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
         currentPrice,
       }),
     });
+
+    // If mistakes detected, store them (will be attached to closed trade later)
+    if (mistakes.length > 0) {
+      // Store on the trade journal
+      const updatedTrades = [...get().trades];
+      const lastTrade = updatedTrades[updatedTrades.length - 1];
+      if (lastTrade) {
+        lastTrade.journal = { ...lastTrade.journal, postNotes: `⚠️ ${mistakes.join(", ")}` };
+        set({ trades: updatedTrades });
+      }
+    }
+
     return true;
   },
 
-  sell: (quantity) => {
-    const { position, cash, currentPrice, candles, currentIndex } = get();
+  sell: (quantity, journal?) => {
+    const { position, cash, currentPrice, candles, currentIndex, trades, closedTrades } = get();
     if (!position || position.quantity < quantity) return false;
+
+    // Detect mistakes
+    const mistakes = detectMistakes(trades, closedTrades, currentIndex, "sell", candles);
 
     const proceeds = currentPrice * quantity;
     const remaining = position.quantity - quantity;
     const newPosition: Position | null =
       remaining > 0 ? { ...position, quantity: remaining } : null;
 
-    // Calculate realized P&L for this sale
     const tradePnl = (currentPrice - position.avgPrice) * quantity;
     const newRealizedPnl = get().realizedPnl + tradePnl;
 
-    // Record closed trade
+    // Find the entry trade for this position
+    const entryTrades = trades.filter((t) => t.side === "buy");
+    const lastEntry = entryTrades[entryTrades.length - 1];
+
     const closedTrade: ClosedTrade = {
       id: `closed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       symbol: get().symbol,
       entryPrice: position.avgPrice,
       exitPrice: currentPrice,
       quantity,
-      entryTime: 0, // simplified — would need entry trade lookup for exact time
+      entryTime: lastEntry?.time ?? 0,
       exitTime: candles[currentIndex]?.time ?? 0,
-      entryCandleIndex: 0,
+      entryCandleIndex: lastEntry?.candleIndex ?? 0,
       exitCandleIndex: currentIndex,
       plannedStop: position.plannedStop,
       rMultiple: position.plannedStop
         ? (currentPrice - position.avgPrice) / (position.avgPrice - position.plannedStop)
         : null,
       realizedPnl: tradePnl,
+      journal,
+      mistakes,
     };
 
     const trade: Trade = {
@@ -217,11 +297,11 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
       quantity,
       time: candles[currentIndex]?.time ?? 0,
       candleIndex: currentIndex,
+      journal,
     };
 
     const newCash = cash + proceeds;
 
-    // Check daily loss limit
     const { riskSettings, startingCash } = get();
     const lossLimit = (riskSettings.dailyLossLimitPercent / 100) * startingCash;
     const hitLimit = newRealizedPnl <= -lossLimit;

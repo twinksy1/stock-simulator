@@ -7,6 +7,30 @@ export interface Candle {
   volume: number;
 }
 
+export type Confidence = 1 | 2 | 3 | 4 | 5;
+
+export type SetupLabel =
+  | "breakout"
+  | "breakdown"
+  | "pullback"
+  | "reversal"
+  | "momentum"
+  | "mean-reversion"
+  | "support-bounce"
+  | "resistance-reject"
+  | "ma-reclaim"
+  | "rsi-divergence"
+  | "custom";
+
+export interface TradeJournal {
+  thesis?: string;
+  confidence?: Confidence;
+  setupLabel?: SetupLabel;
+  customSetupLabel?: string;
+  exitReason?: string;
+  postNotes?: string;
+}
+
 export interface Trade {
   id: string;
   side: "buy" | "sell";
@@ -14,8 +38,16 @@ export interface Trade {
   quantity: number;
   time: number; // sim timestamp
   candleIndex: number;
-  plannedStop?: number; // stop-loss price (planning only, not auto-executed)
+  plannedStop?: number;
+  journal?: TradeJournal;
 }
+
+export type MistakeType =
+  | "revenge-trade"
+  | "overtrading"
+  | "fomo-entry"
+  | "panic-sell"
+  | "moved-stop";
 
 export interface ClosedTrade {
   id: string;
@@ -28,8 +60,10 @@ export interface ClosedTrade {
   entryCandleIndex: number;
   exitCandleIndex: number;
   plannedStop?: number;
-  rMultiple: number | null; // (exit - entry) / (entry - stop), null if no stop
+  rMultiple: number | null;
   realizedPnl: number;
+  journal?: TradeJournal;
+  mistakes: MistakeType[];
 }
 
 export interface Position {
@@ -40,8 +74,8 @@ export interface Position {
 }
 
 export interface RiskSettings {
-  maxRiskPercent: number; // max % of account to risk per trade (default 2)
-  dailyLossLimitPercent: number; // max daily realized loss as % of starting cash (default 5)
+  maxRiskPercent: number;
+  dailyLossLimitPercent: number;
 }
 
 export type PlaybackSpeed = 1 | 2 | 5 | 10;

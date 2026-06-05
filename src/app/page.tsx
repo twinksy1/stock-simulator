@@ -6,6 +6,8 @@ import ControlPanel from "@/components/ControlPanel";
 import OrderPanel from "@/components/OrderPanel";
 import SessionSetup from "@/components/SessionSetup";
 import IndicatorToolbar from "@/components/IndicatorToolbar";
+import TradeHistory from "@/components/TradeHistory";
+import RiskSettingsPanel from "@/components/RiskSettingsPanel";
 
 export default function Home() {
   const { symbol, candles, trades } = useSimulationStore();
@@ -50,11 +52,13 @@ export default function Home() {
               <div className="lg:col-span-3 space-y-4">
                 <ChartWithIndicators />
                 <ControlPanel />
+                <TradeHistory />
               </div>
 
-              {/* Order panel */}
-              <div className="lg:col-span-1">
+              {/* Order panel + Risk Settings */}
+              <div className="lg:col-span-1 space-y-4">
                 <OrderPanel />
+                <RiskSettingsPanel />
               </div>
             </div>
           </div>
