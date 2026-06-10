@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useSimulationStore } from "@/store/simulation";
 
 export default function RiskSettingsPanel() {
-  const { riskSettings, setRiskSettings } = useSimulationStore();
+  const { riskSettings, setRiskSettings, microNoiseEnabled, microTicksPerCandle, setMicroNoise } = useSimulationStore();
   const [isOpen, setIsOpen] = useState(false);
 
   if (!isOpen) {
@@ -133,6 +133,41 @@ export default function RiskSettingsPanel() {
         </select>
         <p className="text-[10px] text-slate-500 mt-0.5">Small fees that compound with overtrading</p>
       </div>
+
+      {/* Price Noise */}
+      <div className="text-[10px] text-slate-500 uppercase tracking-wider font-bold border-b border-slate-700 pb-1 mt-2">Price Noise</div>
+
+      <label className="flex items-center gap-3 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={microNoiseEnabled}
+          onChange={(e) => setMicroNoise(e.target.checked)}
+          className="w-4 h-4 rounded bg-slate-900 border-slate-600 text-blue-600 focus:ring-blue-500"
+        />
+        <div>
+          <span className="text-white text-xs font-medium">⚡ Micro Price Noise</span>
+          <p className="text-slate-500 text-[10px]">
+            Price jitters within each candle — trains holding through noise
+          </p>
+        </div>
+      </label>
+
+      {microNoiseEnabled && (
+        <div>
+          <label className="text-slate-400 text-xs">Noise Intensity</label>
+          <select
+            value={microTicksPerCandle}
+            onChange={(e) => setMicroNoise(true, Number(e.target.value))}
+            className="w-full mt-1 bg-slate-900 border border-slate-600 rounded px-3 py-1.5 text-white text-sm focus:outline-none focus:border-blue-500"
+          >
+            <option value={4}>Low (4 ticks/candle)</option>
+            <option value={8}>Medium (8 ticks/candle)</option>
+            <option value={16}>High (16 ticks/candle)</option>
+            <option value={24}>Extreme (24 ticks/candle)</option>
+          </select>
+          <p className="text-[10px] text-slate-500 mt-0.5">More ticks = more rapid price flickering</p>
+        </div>
+      )}
     </div>
   );
 }

@@ -36,8 +36,13 @@ interface SimulationState {
   scarcityMode: boolean;
   currentPrice: number;
   pnl: number;
-  contextEndIndex: number; // where historical context ends and live trading begins
-  isStudyPhase: boolean; // true = user is studying history before going live
+  contextEndIndex: number;
+  isStudyPhase: boolean;
+  // Micro-tick noise
+  microNoiseEnabled: boolean;
+  microTicksPerCandle: number; // how many sub-ticks per candle (4/8/16)
+  microTickCount: number; // current position within micro-tick sequence
+  microPath: number[]; // pre-generated price path for current candle
 
   loadSession: (
     symbol: string,
@@ -60,6 +65,7 @@ interface SimulationState {
   updatePlannedStop: (stop: number | undefined) => void;
   calculateMaxShares: (stopPrice: number) => number;
   setScarcityMode: (enabled: boolean) => void;
+  setMicroNoise: (enabled: boolean, ticksPerCandle?: number) => void;
   getSessionScore: () => SessionScore;
   getCurrentRegime: () => MarketRegime;
   getActiveEvent: () => MacroEvent | null;
@@ -99,6 +105,66 @@ function isMarketHours(candles: Candle[], currentIndex: number): boolean {
   const [h, m] = etTime.split(":").map(Number);
   const hours = h + m / 60;
   return hours >= 9.5 && hours < 16; // 9:30 AM to 4:00 PM ET
+}
+
+// Generate a realistic micro-price path within a candle's OHLC range
+// Uses a random walk that starts at open, must hit high & low, and ends at close
+function generateMicroPath(candle: Candle, steps: number): number[] {
+  const { open, high, low, close } = candle;
+  const path: number[] = [];
+  const range = high - low;
+
+  if (range === 0 || steps <= 1) {
+    // Flat candle — just interpolate open to close with tiny noise
+    for (let i = 0; i < steps; i++) {
+      const t = i / (steps - 1);
+      path.push(open + (close - open) * t + (Math.random() - 0.5) * 0.01);
+    }
+    return path;
+  }
+
+  // Decide where in the sequence high and low are hit
+  // If bullish (close > open): tend to hit low first, then high
+  // If bearish (close < open): tend to hit high first, then low
+  const isBullish = close >= open;
+  const firstExtreme = isBullish ? Math.floor(steps * (0.1 + Math.random() * 0.3)) : Math.floor(steps * (0.1 + Math.random() * 0.3));
+  const secondExtreme = Math.floor(steps * (0.5 + Math.random() * 0.35));
+
+  const lowStep = isBullish ? firstExtreme : secondExtreme;
+  const highStep = isBullish ? secondExtreme : firstExtreme;
+
+  // Build path with key waypoints: open → low/high → high/low → close
+  for (let i = 0; i < steps; i++) {
+    let target: number;
+    if (i === 0) {
+      target = open;
+    } else if (i <= Math.min(lowStep, highStep)) {
+      // Moving toward first extreme
+      const t = i / Math.min(lowStep, highStep);
+      const dest = lowStep < highStep ? low : high;
+      target = open + (dest - open) * t;
+    } else if (i <= Math.max(lowStep, highStep)) {
+      // Moving toward second extreme
+      const from = lowStep < highStep ? low : high;
+      const dest = lowStep < highStep ? high : low;
+      const t = (i - Math.min(lowStep, highStep)) / (Math.max(lowStep, highStep) - Math.min(lowStep, highStep));
+      target = from + (dest - from) * t;
+    } else {
+      // Moving toward close
+      const from = lowStep > highStep ? low : high;
+      const t = (i - Math.max(lowStep, highStep)) / (steps - 1 - Math.max(lowStep, highStep));
+      target = from + (close - from) * t;
+    }
+
+    // Add micro noise (jitter within ±0.3% of range)
+    const noise = (Math.random() - 0.5) * range * 0.3;
+    const noisy = Math.max(low - range * 0.05, Math.min(high + range * 0.05, target + noise));
+    path.push(parseFloat(noisy.toFixed(2)));
+  }
+
+  // Ensure last step is exactly close
+  path[steps - 1] = close;
+  return path;
 }
 
 function detectMistakes(
@@ -180,6 +246,10 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
   pnl: 0,
   contextEndIndex: 0,
   isStudyPhase: false,
+  microNoiseEnabled: true,
+  microTicksPerCandle: 8,
+  microTickCount: 0,
+  microPath: [],
 
   loadSession: (symbol, date, candles, events = [], regimes = [], correlatedSymbols = [], contextEndIndex = 0) => {
     const startIndex = contextEndIndex > 0 ? contextEndIndex : Math.min(50, Math.max(0, candles.length - 1));
@@ -199,15 +269,56 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
   },
 
   tick: () => {
-    const { candles, currentIndex, isPlaying } = get();
+    const { candles, currentIndex, isPlaying, microNoiseEnabled, microTicksPerCandle, microTickCount, microPath } = get();
     if (!isPlaying || currentIndex >= candles.length - 1) {
       if (currentIndex >= candles.length - 1) set({ isPlaying: false });
       return;
     }
-    const nextIndex = currentIndex + 1;
-    const price = candles[nextIndex].close;
-    const s = get();
-    set({ currentIndex: nextIndex, currentPrice: price, pnl: calculatePnl({ cash: s.cash, startingCash: s.startingCash, position: s.position, currentPrice: price }) });
+
+    if (!microNoiseEnabled) {
+      // Original behavior: advance one full candle per tick
+      const nextIndex = currentIndex + 1;
+      const price = candles[nextIndex].close;
+      const s = get();
+      set({ currentIndex: nextIndex, currentPrice: price, pnl: calculatePnl({ cash: s.cash, startingCash: s.startingCash, position: s.position, currentPrice: price }) });
+      return;
+    }
+
+    // Micro-tick mode: sub-tick price jitter within current candle
+    if (microTickCount === 0 || microPath.length === 0) {
+      // Starting a new candle — generate the micro path for the NEXT candle
+      const nextCandle = candles[currentIndex + 1];
+      const path = generateMicroPath(nextCandle, microTicksPerCandle);
+      const price = path[0];
+      const s = get();
+      set({
+        microPath: path,
+        microTickCount: 1,
+        currentPrice: price,
+        pnl: calculatePnl({ cash: s.cash, startingCash: s.startingCash, position: s.position, currentPrice: price }),
+      });
+    } else if (microTickCount < microTicksPerCandle - 1) {
+      // Mid-candle: advance to next micro-tick price
+      const price = microPath[microTickCount];
+      const s = get();
+      set({
+        microTickCount: microTickCount + 1,
+        currentPrice: price,
+        pnl: calculatePnl({ cash: s.cash, startingCash: s.startingCash, position: s.position, currentPrice: price }),
+      });
+    } else {
+      // Last micro-tick: finalize candle — advance index, reset micro state
+      const nextIndex = currentIndex + 1;
+      const price = candles[nextIndex].close;
+      const s = get();
+      set({
+        currentIndex: nextIndex,
+        currentPrice: price,
+        microTickCount: 0,
+        microPath: [],
+        pnl: calculatePnl({ cash: s.cash, startingCash: s.startingCash, position: s.position, currentPrice: price }),
+      });
+    }
   },
 
   play: () => { if (!get().isStudyPhase) set({ isPlaying: true }); },
@@ -345,8 +456,9 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
     return Math.min(Math.floor(maxRiskDollars / (currentPrice - stopPrice)), Math.floor(cash / currentPrice));
   },
   setScarcityMode: (enabled) => set({ scarcityMode: enabled }),
+  setMicroNoise: (enabled, ticksPerCandle?) => set({ microNoiseEnabled: enabled, microTicksPerCandle: ticksPerCandle ?? get().microTicksPerCandle, microTickCount: 0, microPath: [] }),
   getSessionScore: () => { const { trades, closedTrades, currentIndex } = get(); return calculateSessionScore(trades, closedTrades, currentIndex); },
   getCurrentRegime: () => { const { regimes, currentIndex } = get(); if (regimes.length === 0) return "choppy"; return regimes.reduce((c, r) => r.startIndex <= currentIndex ? r : c, regimes[0]).regime; },
   getActiveEvent: () => { const { events, currentIndex } = get(); return events.find((e) => e.candleIndex <= currentIndex && currentIndex - e.candleIndex < 5) ?? null; },
-  reset: () => set({ symbol: "", date: "", candles: [], currentIndex: 0, isPlaying: false, speed: 1, cash: STARTING_CASH, startingCash: STARTING_CASH, position: null, trades: [], closedTrades: [], riskSettings: DEFAULT_RISK_SETTINGS, realizedPnl: 0, isLockedOut: false, isPendingExecution: false, events: [], regimes: [], correlatedSymbols: [], scarcityMode: false, currentPrice: 0, pnl: 0, contextEndIndex: 0, isStudyPhase: false }),
+  reset: () => set({ symbol: "", date: "", candles: [], currentIndex: 0, isPlaying: false, speed: 1, cash: STARTING_CASH, startingCash: STARTING_CASH, position: null, trades: [], closedTrades: [], riskSettings: DEFAULT_RISK_SETTINGS, realizedPnl: 0, isLockedOut: false, isPendingExecution: false, events: [], regimes: [], correlatedSymbols: [], scarcityMode: false, currentPrice: 0, pnl: 0, contextEndIndex: 0, isStudyPhase: false, microNoiseEnabled: true, microTicksPerCandle: 8, microTickCount: 0, microPath: [] }),
 }));

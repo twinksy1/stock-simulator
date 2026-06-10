@@ -31,6 +31,9 @@ export default function ChartWithIndicators() {
 
   const candles = useSimulationStore((s) => s.candles);
   const currentIndex = useSimulationStore((s) => s.currentIndex);
+  const currentPrice = useSimulationStore((s) => s.currentPrice);
+  const microNoiseEnabled = useSimulationStore((s) => s.microNoiseEnabled);
+  const microTickCount = useSimulationStore((s) => s.microTickCount);
 
   const { showVolume, showRSI, showMACD, movingAverages } = useIndicatorStore();
   const enabledMAs = movingAverages.filter((ma) => ma.enabled);
@@ -280,6 +283,25 @@ export default function ChartWithIndicators() {
     }
   }, [candles, currentIndex, indicators, showVolume, showRSI, showMACD, enabledMAs]);
 
+  // Micro-tick: efficiently update just the last candle bar's close/high/low
+  useEffect(() => {
+    if (!microNoiseEnabled || !candleSeriesRef.current || candles.length === 0) return;
+    if (microTickCount === 0) return; // skip when candle just finalized
+
+    const candle = candles[currentIndex];
+    if (!candle) return;
+
+    // Update the last bar with current micro-tick price as the "close"
+    // Expand high/low if the micro-price exceeds them
+    candleSeriesRef.current.update({
+      time: candle.time as Time,
+      open: candle.open,
+      high: Math.max(candle.high, currentPrice),
+      low: Math.min(candle.low, currentPrice),
+      close: currentPrice,
+    });
+  }, [microNoiseEnabled, microTickCount, currentPrice, candles, currentIndex]);
+
   // Current candle info bar
   const currentCandle = candles[currentIndex] ?? null;
   const currentRSI = indicators?.rsi[currentIndex] ?? null;
@@ -302,10 +324,10 @@ export default function ChartWithIndicators() {
             C{" "}
             <span
               className={
-                currentCandle.close >= currentCandle.open ? "text-green-400" : "text-red-400"
+                currentPrice >= currentCandle.open ? "text-green-400" : "text-red-400"
               }
             >
-              {currentCandle.close.toFixed(2)}
+              {microNoiseEnabled && microTickCount > 0 ? currentPrice.toFixed(2) : currentCandle.close.toFixed(2)}
             </span>
           </span>
           <span className="text-slate-400">

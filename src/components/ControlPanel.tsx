@@ -7,7 +7,7 @@ import type { PlaybackSpeed } from "@/types/market";
 const SPEEDS: PlaybackSpeed[] = [1, 2, 5, 10];
 
 export default function ControlPanel() {
-  const { isPlaying, speed, currentIndex, candles, play, pause, setSpeed, jumpTo, tick, isStudyPhase, contextEndIndex } =
+  const { isPlaying, speed, currentIndex, candles, play, pause, setSpeed, jumpTo, tick, isStudyPhase, contextEndIndex, microNoiseEnabled, microTicksPerCandle } =
     useSimulationStore();
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -16,7 +16,9 @@ export default function ControlPanel() {
     if (intervalRef.current) clearInterval(intervalRef.current);
 
     if (isPlaying) {
-      const ms = Math.max(50, 1000 / speed);
+      // With micro-noise: fire N times faster so one full candle still takes ~1s at 1x speed
+      const baseMs = Math.max(50, 1000 / speed);
+      const ms = microNoiseEnabled ? Math.max(30, baseMs / microTicksPerCandle) : baseMs;
       intervalRef.current = setInterval(() => {
         tick();
       }, ms);
@@ -25,7 +27,7 @@ export default function ControlPanel() {
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [isPlaying, speed, tick]);
+  }, [isPlaying, speed, tick, microNoiseEnabled, microTicksPerCandle]);
 
   const progress = candles.length > 0 ? (currentIndex / (candles.length - 1)) * 100 : 0;
 
