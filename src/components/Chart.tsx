@@ -62,13 +62,28 @@ export default function Chart() {
   useEffect(() => {
     if (!seriesRef.current || candles.length === 0) return;
 
-    const visibleCandles = candles.slice(0, currentIndex + 1).map((c) => ({
-      time: c.time as Time,
+    const visibleCandles = candles.slice(0, currentIndex + 1).map((c) => {
+    // Convert UNIX seconds (ET) → Date object
+    const est = new Date(c.time * 1000);
+
+    // Convert EST → UTC-like structure for Lightweight Charts
+    const time = {
+      year: est.getUTCFullYear(),
+      month: est.getUTCMonth() + 1,
+      day: est.getUTCDate(),
+      hour: est.getUTCHours(),
+      minute: est.getUTCMinutes(),
+    };
+
+    return {
+      time,
       open: c.open,
       high: c.high,
       low: c.low,
       close: c.close,
-    })) as CandlestickData<Time>[];
+    };
+  }) as CandlestickData<Time>[];
+
 
     seriesRef.current.setData(visibleCandles);
   }, [candles, currentIndex]);
