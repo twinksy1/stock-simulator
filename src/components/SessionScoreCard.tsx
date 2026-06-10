@@ -1,15 +1,16 @@
 "use client";
 
+import { useMemo } from "react";
 import { useSimulationStore } from "@/store/simulation";
 
 export default function SessionScoreCard() {
   const getSessionScore = useSimulationStore((s) => s.getSessionScore);
-  const trades = useSimulationStore((s) => s.trades);
-  const closedTrades = useSimulationStore((s) => s.closedTrades);
+  const tradeCount = useSimulationStore((s) => s.trades.length);
+  const closedTradeCount = useSimulationStore((s) => s.closedTrades.length);
 
-  if (trades.length === 0) return null;
+  const score = useMemo(() => getSessionScore(), [getSessionScore, tradeCount, closedTradeCount]);
 
-  const score = getSessionScore();
+  if (tradeCount === 0) return null;
 
   const gradeColor: Record<string, string> = {
     A: "text-green-400", B: "text-cyan-400", C: "text-yellow-400", D: "text-orange-400", F: "text-red-400",
@@ -30,7 +31,7 @@ export default function SessionScoreCard() {
         <ScoreBar label="Journal" value={score.journalScore} tip="Documenting trades" />
       </div>
 
-      {closedTrades.length > 0 && (
+      {closedTradeCount > 0 && (
         <div className="mt-3 pt-3 border-t border-slate-700 text-[11px] text-slate-400">
           {score.patienceScore < 50 && <p>⚠️ Consider trading less — quality over quantity</p>}
           {score.riskScore < 50 && <p>⚠️ Set stop-losses on your entries</p>}

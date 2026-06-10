@@ -14,8 +14,13 @@ import SetupStats from "@/components/SetupStats";
 import OrderFlowPanel from "@/components/OrderFlowPanel";
 
 export default function Home() {
-  const { symbol, candles, trades, isPendingExecution, isStudyPhase, goLive, contextEndIndex } = useSimulationStore();
-  const isSessionActive = candles.length > 0;
+  const symbol = useSimulationStore((s) => s.symbol);
+  const isSessionActive = useSimulationStore((s) => s.candles.length > 0);
+  const tradeCount = useSimulationStore((s) => s.trades.length);
+  const isPendingExecution = useSimulationStore((s) => s.isPendingExecution);
+  const isStudyPhase = useSimulationStore((s) => s.isStudyPhase);
+  const goLive = useSimulationStore((s) => s.goLive);
+  const contextEndIndex = useSimulationStore((s) => s.contextEndIndex);
 
   return (
     <main className="min-h-screen bg-slate-900 text-white p-6">
@@ -61,7 +66,7 @@ export default function Home() {
               <span className="bg-slate-700 px-3 py-1 rounded font-mono font-bold">
                 {symbol}
               </span>
-              {!isStudyPhase && <span className="text-slate-400">{trades.length} trades</span>}
+              {!isStudyPhase && <span className="text-slate-400">{tradeCount} trades</span>}
               {isStudyPhase && <span className="text-indigo-400 text-xs">📖 Study Mode</span>}
               {isPendingExecution && (
                 <span className="text-yellow-400 text-xs animate-pulse">

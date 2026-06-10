@@ -107,7 +107,17 @@ export function generateMultiDayData(
   const candles: Candle[] = [];
   const events: MacroEvent[] = [];
   let price = basePrice;
-  const startTimestamp = new Date(`${startDate}T00:00:00-04:00`).getTime() / 1000;
+
+  // Calculate midnight ET for the start date, respecting DST
+  // We create a date at noon UTC on that day, then figure out the ET offset
+  const refDate = new Date(`${startDate}T12:00:00Z`);
+  const etString = refDate.toLocaleString("en-US", { timeZone: "America/New_York", hour12: false, hour: "2-digit" });
+  const etHourAtNoonUTC = parseInt(etString);
+  // If noon UTC = 7am ET, offset is -5 (EST). If noon UTC = 8am ET, offset is -4 (EDT).
+  const etOffsetHours = etHourAtNoonUTC - 12;
+  // Midnight ET in UTC = midnight - offset (e.g. midnight ET = 05:00 UTC for EST, 04:00 UTC for EDT)
+  const midnightETinUTC = new Date(`${startDate}T00:00:00Z`).getTime() / 1000 - etOffsetHours * 3600;
+  const startTimestamp = midnightETinUTC;
 
   // Decide which days have events (sparse)
   const eventDays = new Set<number>();

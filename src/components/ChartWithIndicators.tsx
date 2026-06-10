@@ -36,7 +36,10 @@ export default function ChartWithIndicators() {
   const microTickCount = useSimulationStore((s) => s.microTickCount);
 
   const { showVolume, showRSI, showMACD, movingAverages } = useIndicatorStore();
-  const enabledMAs = movingAverages.filter((ma) => ma.enabled);
+  const enabledMAs = useMemo(
+    () => movingAverages.filter((ma) => ma.enabled),
+    [movingAverages]
+  );
 
   // Compute indicators for the full dataset
   const indicators = useMemo(() => {

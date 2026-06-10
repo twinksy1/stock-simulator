@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 import type {
   Candle,
   Trade,
@@ -222,7 +223,7 @@ function calculateSessionScore(trades: Trade[], closedTrades: ClosedTrade[], cur
   return { patienceScore, riskScore, journalScore, overallGrade };
 }
 
-export const useSimulationStore = create<SimulationState>((set, get) => ({
+export const useSimulationStore = create<SimulationState>()(persist((set, get) => ({
   symbol: "",
   date: "",
   candles: [],
@@ -460,5 +461,13 @@ export const useSimulationStore = create<SimulationState>((set, get) => ({
   getSessionScore: () => { const { trades, closedTrades, currentIndex } = get(); return calculateSessionScore(trades, closedTrades, currentIndex); },
   getCurrentRegime: () => { const { regimes, currentIndex } = get(); if (regimes.length === 0) return "choppy"; return regimes.reduce((c, r) => r.startIndex <= currentIndex ? r : c, regimes[0]).regime; },
   getActiveEvent: () => { const { events, currentIndex } = get(); return events.find((e) => e.candleIndex <= currentIndex && currentIndex - e.candleIndex < 5) ?? null; },
-  reset: () => set({ symbol: "", date: "", candles: [], currentIndex: 0, isPlaying: false, speed: 1, cash: STARTING_CASH, startingCash: STARTING_CASH, position: null, trades: [], closedTrades: [], riskSettings: DEFAULT_RISK_SETTINGS, realizedPnl: 0, isLockedOut: false, isPendingExecution: false, events: [], regimes: [], correlatedSymbols: [], scarcityMode: false, currentPrice: 0, pnl: 0, contextEndIndex: 0, isStudyPhase: false, microNoiseEnabled: true, microTicksPerCandle: 8, microTickCount: 0, microPath: [] }),
+  reset: () => set({ symbol: "", date: "", candles: [], currentIndex: 0, isPlaying: false, speed: 1, cash: STARTING_CASH, startingCash: STARTING_CASH, position: null, trades: [], closedTrades: [], realizedPnl: 0, isLockedOut: false, isPendingExecution: false, events: [], regimes: [], correlatedSymbols: [], scarcityMode: false, currentPrice: 0, pnl: 0, contextEndIndex: 0, isStudyPhase: false, microTickCount: 0, microPath: [] }),
+}), {
+  name: "stock-sim-settings",
+  partialize: (state) => ({
+    riskSettings: state.riskSettings,
+    microNoiseEnabled: state.microNoiseEnabled,
+    microTicksPerCandle: state.microTicksPerCandle,
+    scarcityMode: state.scarcityMode,
+  }),
 }));

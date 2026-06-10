@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { useSimulationStore } from "@/store/simulation";
 import type { MarketRegime } from "@/types/market";
 
@@ -22,18 +23,20 @@ export default function MarketContextBar() {
   const activeEvent = getActiveEvent();
   const regimeConfig = REGIME_CONFIG[regime];
 
-  // Compute correlated symbol current changes
-  const corrChanges = correlatedSymbols.map((cs) => {
-    if (currentIndex === 0 || currentIndex >= cs.candles.length) return { symbol: cs.symbol, change: 0, correlation: cs.correlation };
-    const prev = cs.candles[Math.max(0, currentIndex - 1)].close;
-    const curr = cs.candles[currentIndex].close;
-    return { symbol: cs.symbol, change: ((curr - prev) / prev) * 100, correlation: cs.correlation };
-  });
+  const { corrChanges, mainChange } = useMemo(() => {
+    const corrChanges = correlatedSymbols.map((cs) => {
+      if (currentIndex === 0 || currentIndex >= cs.candles.length) return { symbol: cs.symbol, change: 0, correlation: cs.correlation };
+      const prev = cs.candles[Math.max(0, currentIndex - 1)].close;
+      const curr = cs.candles[currentIndex].close;
+      return { symbol: cs.symbol, change: ((curr - prev) / prev) * 100, correlation: cs.correlation };
+    });
 
-  // Main symbol change
-  const mainChange = currentIndex > 0 && candles.length > currentIndex
-    ? ((candles[currentIndex].close - candles[currentIndex - 1].close) / candles[currentIndex - 1].close) * 100
-    : 0;
+    const mainChange = currentIndex > 0 && candles.length > currentIndex
+      ? ((candles[currentIndex].close - candles[currentIndex - 1].close) / candles[currentIndex - 1].close) * 100
+      : 0;
+
+    return { corrChanges, mainChange };
+  }, [correlatedSymbols, currentIndex, candles]);
 
   return (
     <div className="bg-slate-800 rounded-lg px-3 py-2 border border-slate-700 space-y-1.5">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useSimulationStore } from "@/store/simulation";
 import type { MistakeType } from "@/types/market";
 
@@ -13,22 +13,22 @@ const MISTAKE_LABELS: Record<MistakeType, { emoji: string; label: string }> = {
 };
 
 export default function TradeHistory() {
-  const { closedTrades, trades, realizedPnl } = useSimulationStore();
+  const closedTrades = useSimulationStore((s) => s.closedTrades);
+  const totalTrades = useSimulationStore((s) => s.trades.length);
+  const realizedPnl = useSimulationStore((s) => s.realizedPnl);
   const [isOpen, setIsOpen] = useState(false);
 
-  const winningTrades = closedTrades.filter((t) => t.realizedPnl > 0);
-  const losingTrades = closedTrades.filter((t) => t.realizedPnl < 0);
-  const winRate = closedTrades.length > 0 ? (winningTrades.length / closedTrades.length) * 100 : 0;
-  const avgR =
-    closedTrades.filter((t) => t.rMultiple !== null).length > 0
-      ? closedTrades
-          .filter((t) => t.rMultiple !== null)
-          .reduce((sum, t) => sum + (t.rMultiple ?? 0), 0) /
-        closedTrades.filter((t) => t.rMultiple !== null).length
-      : null;
+  const stats = useMemo(() => {
+    const winningTrades = closedTrades.filter((t) => t.realizedPnl > 0);
+    const losingTrades = closedTrades.filter((t) => t.realizedPnl < 0);
+    const winRate = closedTrades.length > 0 ? (winningTrades.length / closedTrades.length) * 100 : 0;
+    const rTrades = closedTrades.filter((t) => t.rMultiple !== null);
+    const avgR = rTrades.length > 0 ? rTrades.reduce((sum, t) => sum + (t.rMultiple ?? 0), 0) / rTrades.length : null;
+    const totalMistakes = closedTrades.reduce((sum, t) => sum + t.mistakes.length, 0);
+    return { winningTrades, losingTrades, winRate, avgR, totalMistakes };
+  }, [closedTrades]);
 
-  const totalMistakes = closedTrades.reduce((sum, t) => sum + t.mistakes.length, 0);
-  const totalTrades = trades.length;
+  const { winningTrades, losingTrades, winRate, avgR, totalMistakes } = stats;
 
   if (!isOpen) {
     return (

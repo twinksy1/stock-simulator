@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { useSimulationStore } from "@/store/simulation";
 import type { SetupLabel } from "@/types/market";
 
@@ -20,24 +21,25 @@ const SETUP_DISPLAY: Record<SetupLabel, string> = {
 export default function SetupStats() {
   const closedTrades = useSimulationStore((s) => s.closedTrades);
 
-  // Group closed trades by setup label
-  const setupMap = new Map<string, { wins: number; losses: number; totalR: number; rCount: number; totalPnl: number; avgHold: number; count: number }>();
+  const entries = useMemo(() => {
+    const setupMap = new Map<string, { wins: number; losses: number; totalR: number; rCount: number; totalPnl: number; avgHold: number; count: number }>();
 
-  for (const ct of closedTrades) {
-    const label = ct.journal?.setupLabel ?? "unlabeled";
-    const existing = setupMap.get(label) ?? { wins: 0, losses: 0, totalR: 0, rCount: 0, totalPnl: 0, avgHold: 0, count: 0 };
-    existing.count++;
-    if (ct.realizedPnl > 0) existing.wins++;
-    else existing.losses++;
-    if (ct.rMultiple !== null) { existing.totalR += ct.rMultiple; existing.rCount++; }
-    existing.totalPnl += ct.realizedPnl;
-    existing.avgHold += ct.holdDuration;
-    setupMap.set(label, existing);
-  }
+    for (const ct of closedTrades) {
+      const label = ct.journal?.setupLabel ?? "unlabeled";
+      const existing = setupMap.get(label) ?? { wins: 0, losses: 0, totalR: 0, rCount: 0, totalPnl: 0, avgHold: 0, count: 0 };
+      existing.count++;
+      if (ct.realizedPnl > 0) existing.wins++;
+      else existing.losses++;
+      if (ct.rMultiple !== null) { existing.totalR += ct.rMultiple; existing.rCount++; }
+      existing.totalPnl += ct.realizedPnl;
+      existing.avgHold += ct.holdDuration;
+      setupMap.set(label, existing);
+    }
 
-  if (setupMap.size === 0) return null;
+    return [...setupMap.entries()].sort((a, b) => b[1].count - a[1].count);
+  }, [closedTrades]);
 
-  const entries = [...setupMap.entries()].sort((a, b) => b[1].count - a[1].count);
+  if (entries.length === 0) return null;
 
   return (
     <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
