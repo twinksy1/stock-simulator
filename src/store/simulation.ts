@@ -13,6 +13,8 @@ import type {
   MarketRegime,
   CorrelatedSymbol,
   SessionScore,
+  PreSessionReflection,
+  PostSessionReflection,
 } from "@/types/market";
 
 interface SimulationState {
@@ -45,6 +47,13 @@ interface SimulationState {
   microTickCount: number; // current position within micro-tick sequence
   microPath: number[]; // pre-generated price path for current candle
 
+  // Pre/Post session reflection
+  showPreSession: boolean;
+  showPostSession: boolean;
+  preSessionReflection: PreSessionReflection | null;
+  postSessionReflection: PostSessionReflection | null;
+  sessionEnded: boolean;
+
   loadSession: (
     symbol: string,
     date: string,
@@ -67,6 +76,9 @@ interface SimulationState {
   calculateMaxShares: (stopPrice: number) => number;
   setScarcityMode: (enabled: boolean) => void;
   setMicroNoise: (enabled: boolean, ticksPerCandle?: number) => void;
+  submitPreSession: (reflection: PreSessionReflection) => void;
+  submitPostSession: (reflection: PostSessionReflection) => void;
+  dismissPostSession: () => void;
   getSessionScore: () => SessionScore;
   getCurrentRegime: () => MarketRegime;
   getActiveEvent: () => MacroEvent | null;
@@ -251,6 +263,11 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
   microTicksPerCandle: 8,
   microTickCount: 0,
   microPath: [],
+  showPreSession: false,
+  showPostSession: false,
+  preSessionReflection: null,
+  postSessionReflection: null,
+  sessionEnded: false,
 
   loadSession: (symbol, date, candles, events = [], regimes = [], correlatedSymbols = [], contextEndIndex = 0) => {
     const startIndex = contextEndIndex > 0 ? contextEndIndex : Math.min(50, Math.max(0, candles.length - 1));
@@ -266,13 +283,18 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
   },
 
   goLive: () => {
-    set({ isStudyPhase: false });
+    // Show pre-session reflection popup (simulation stays paused)
+    set({ showPreSession: true, isPlaying: false });
   },
 
   tick: () => {
-    const { candles, currentIndex, isPlaying, microNoiseEnabled, microTicksPerCandle, microTickCount, microPath } = get();
+    const { candles, currentIndex, isPlaying, microNoiseEnabled, microTicksPerCandle, microTickCount, microPath, sessionEnded } = get();
     if (!isPlaying || currentIndex >= candles.length - 1) {
-      if (currentIndex >= candles.length - 1) set({ isPlaying: false });
+      if (currentIndex >= candles.length - 1 && !sessionEnded) {
+        set({ isPlaying: false, showPostSession: true, sessionEnded: true });
+      } else if (currentIndex >= candles.length - 1) {
+        set({ isPlaying: false });
+      }
       return;
     }
 
@@ -322,7 +344,7 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
     }
   },
 
-  play: () => { if (!get().isStudyPhase) set({ isPlaying: true }); },
+  play: () => { const s = get(); if (!s.isStudyPhase && !s.showPreSession && !s.showPostSession) set({ isPlaying: true }); },
   pause: () => set({ isPlaying: false }),
   setSpeed: (speed) => set({ speed }),
 
@@ -465,10 +487,19 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
   },
   setScarcityMode: (enabled) => set({ scarcityMode: enabled }),
   setMicroNoise: (enabled, ticksPerCandle?) => set({ microNoiseEnabled: enabled, microTicksPerCandle: ticksPerCandle ?? get().microTicksPerCandle, microTickCount: 0, microPath: [] }),
+  submitPreSession: (reflection) => {
+    set({ preSessionReflection: reflection, showPreSession: false, isStudyPhase: false });
+  },
+  submitPostSession: (reflection) => {
+    set({ postSessionReflection: reflection, showPostSession: false });
+  },
+  dismissPostSession: () => {
+    set({ showPostSession: false });
+  },
   getSessionScore: () => { const { trades, closedTrades, currentIndex } = get(); return calculateSessionScore(trades, closedTrades, currentIndex); },
   getCurrentRegime: () => { const { regimes, currentIndex } = get(); if (regimes.length === 0) return "choppy"; return regimes.reduce((c, r) => r.startIndex <= currentIndex ? r : c, regimes[0]).regime; },
   getActiveEvent: () => { const { events, currentIndex } = get(); return events.find((e) => e.candleIndex <= currentIndex && currentIndex - e.candleIndex < 5) ?? null; },
-  reset: () => set({ symbol: "", date: "", candles: [], currentIndex: 0, isPlaying: false, speed: 1, cash: STARTING_CASH, startingCash: STARTING_CASH, position: null, trades: [], closedTrades: [], realizedPnl: 0, isLockedOut: false, isPendingExecution: false, events: [], regimes: [], correlatedSymbols: [], scarcityMode: false, currentPrice: 0, pnl: 0, contextEndIndex: 0, isStudyPhase: false, microTickCount: 0, microPath: [] }),
+  reset: () => set({ symbol: "", date: "", candles: [], currentIndex: 0, isPlaying: false, speed: 1, cash: STARTING_CASH, startingCash: STARTING_CASH, position: null, trades: [], closedTrades: [], realizedPnl: 0, isLockedOut: false, isPendingExecution: false, events: [], regimes: [], correlatedSymbols: [], scarcityMode: false, currentPrice: 0, pnl: 0, contextEndIndex: 0, isStudyPhase: false, microTickCount: 0, microPath: [], showPreSession: false, showPostSession: false, preSessionReflection: null, postSessionReflection: null, sessionEnded: false }),
 }), {
   name: "stock-sim-settings",
   partialize: (state) => ({

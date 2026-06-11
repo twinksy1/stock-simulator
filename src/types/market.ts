@@ -110,6 +110,51 @@ export interface SessionScore {
   overallGrade: "A" | "B" | "C" | "D" | "F";
 }
 
+// Pre-session and post-session reflection types
+export type ReflectionRegime =
+  | "uptrend"
+  | "downtrend"
+  | "range"
+  | "chop"
+  | "low-vol-drift"
+  | "high-vol-expansion";
+
+export type ReflectionStrategy =
+  | "mean-reversion"
+  | "trend-pullback"
+  | "breakout"
+  | "avoid-observe";
+
+export type EntrySignal =
+  | "wick-rejection"
+  | "liquidity-sweep"
+  | "reclaim"
+  | "divergence";
+
+export type AvoidItem =
+  | "trading-against-trend"
+  | "trading-without-confirmation"
+  | "trading-in-chop"
+  | "entering-early";
+
+export interface PreSessionReflection {
+  predictedRegime: ReflectionRegime;
+  strategy: ReflectionStrategy;
+  entrySignals: EntrySignal[];
+  avoidItems: AvoidItem[];
+}
+
+export type StrategyAlignment = "yes" | "no" | "partially";
+
+export interface PostSessionReflection {
+  actualRegime: ReflectionRegime;
+  strategyAlignment: StrategyAlignment;
+  matchedTradeIds: string[];
+  violatedTradeIds: string[];
+  lessonsLearned: string;
+  nextTimeDifferent: string;
+}
+
 export type PlaybackSpeed = 1 | 2 | 5 | 10;
 
 export interface SimSession {

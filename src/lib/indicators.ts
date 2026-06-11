@@ -1,10 +1,17 @@
-import { SMA, RSI, MACD } from "technicalindicators";
+import { SMA, RSI, MACD, BollingerBands } from "technicalindicators";
 import type { Candle } from "@/types/market";
+
+export interface BollingerBandData {
+  upper: (number | null)[];
+  middle: (number | null)[];
+  lower: (number | null)[];
+}
 
 export interface IndicatorData {
   smaLines: { period: number; values: (number | null)[] }[];
   rsi: (number | null)[];
   macd: { macd: number | null; signal: number | null; histogram: number | null }[];
+  bollingerBands: BollingerBandData;
 }
 
 /**
@@ -53,5 +60,23 @@ export function computeIndicators(candles: Candle[], maPeriods: number[]): Indic
     })),
   ];
 
-  return { smaLines, rsi, macd };
+  // Bollinger Bands (20, 2)
+  const bbRaw = BollingerBands.calculate({ period: 20, values: closes, stdDev: 2 });
+  const bbPadding = closes.length - bbRaw.length;
+  const bollingerBands: BollingerBandData = {
+    upper: [
+      ...Array(bbPadding).fill(null),
+      ...bbRaw.map((b) => b.upper),
+    ],
+    middle: [
+      ...Array(bbPadding).fill(null),
+      ...bbRaw.map((b) => b.middle),
+    ],
+    lower: [
+      ...Array(bbPadding).fill(null),
+      ...bbRaw.map((b) => b.lower),
+    ],
+  };
+
+  return { smaLines, rsi, macd, bollingerBands };
 }

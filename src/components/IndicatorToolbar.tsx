@@ -8,10 +8,12 @@ export default function IndicatorToolbar() {
     showVolume,
     showRSI,
     showMACD,
+    showBollingerBands,
     movingAverages,
     toggleVolume,
     toggleRSI,
     toggleMACD,
+    toggleBollingerBands,
     toggleMA,
     addMA,
     removeMA,
@@ -44,6 +46,9 @@ export default function IndicatorToolbar() {
 
         {/* MACD toggle */}
         <TogglePill label="MACD" active={showMACD} onClick={toggleMACD} color="#3b82f6" />
+
+        {/* Bollinger Bands toggle */}
+        <TogglePill label="BB" active={showBollingerBands} onClick={toggleBollingerBands} color="#a78bfa" />
 
         {/* Separator */}
         <span className="w-px h-5 bg-slate-600 mx-1" />

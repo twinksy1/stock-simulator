@@ -12,6 +12,8 @@ import MarketContextBar from "@/components/MarketContextBar";
 import SessionScoreCard from "@/components/SessionScoreCard";
 import SetupStats from "@/components/SetupStats";
 import OrderFlowPanel from "@/components/OrderFlowPanel";
+import PreSessionModal from "@/components/PreSessionModal";
+import PostSessionModal from "@/components/PostSessionModal";
 
 export default function Home() {
   const symbol = useSimulationStore((s) => s.symbol);
@@ -21,6 +23,12 @@ export default function Home() {
   const isStudyPhase = useSimulationStore((s) => s.isStudyPhase);
   const goLive = useSimulationStore((s) => s.goLive);
   const contextEndIndex = useSimulationStore((s) => s.contextEndIndex);
+  const showPreSession = useSimulationStore((s) => s.showPreSession);
+  const showPostSession = useSimulationStore((s) => s.showPostSession);
+  const submitPreSession = useSimulationStore((s) => s.submitPreSession);
+  const submitPostSession = useSimulationStore((s) => s.submitPostSession);
+  const dismissPostSession = useSimulationStore((s) => s.dismissPostSession);
+  const trades = useSimulationStore((s) => s.trades);
 
   return (
     <main className="min-h-screen bg-slate-900 text-white p-6">
@@ -108,6 +116,20 @@ export default function Home() {
           </div>
         )}
       </div>
+
+      {/* Pre-Session Reflection Modal */}
+      {showPreSession && (
+        <PreSessionModal onSubmit={submitPreSession} />
+      )}
+
+      {/* Post-Session Reflection Modal */}
+      {showPostSession && (
+        <PostSessionModal
+          trades={trades}
+          onSubmit={submitPostSession}
+          onDismiss={dismissPostSession}
+        />
+      )}
     </main>
   );
 }

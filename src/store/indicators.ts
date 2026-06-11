@@ -11,11 +11,13 @@ interface IndicatorSettings {
   showVolume: boolean;
   showRSI: boolean;
   showMACD: boolean;
+  showBollingerBands: boolean;
   movingAverages: MovingAverageConfig[];
 
   toggleVolume: () => void;
   toggleRSI: () => void;
   toggleMACD: () => void;
+  toggleBollingerBands: () => void;
   toggleMA: (id: string) => void;
   addMA: (period: number, color: string) => void;
   removeMA: (id: string) => void;
@@ -33,11 +35,13 @@ export const useIndicatorStore = create<IndicatorSettings>((set) => ({
   showVolume: true,
   showRSI: true,
   showMACD: true,
+  showBollingerBands: false,
   movingAverages: DEFAULT_MAS,
 
   toggleVolume: () => set((s) => ({ showVolume: !s.showVolume })),
   toggleRSI: () => set((s) => ({ showRSI: !s.showRSI })),
   toggleMACD: () => set((s) => ({ showMACD: !s.showMACD })),
+  toggleBollingerBands: () => set((s) => ({ showBollingerBands: !s.showBollingerBands })),
 
   toggleMA: (id) =>
     set((s) => ({

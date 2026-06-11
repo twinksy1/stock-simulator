@@ -28,6 +28,9 @@ export default function ChartWithIndicators() {
   const signalLineRef = useRef<ISeriesApi<"Line"> | null>(null);
   const macdHistRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const maSeriesMapRef = useRef<Map<string, ISeriesApi<"Line">>>(new Map());
+  const bbUpperRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const bbMiddleRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const bbLowerRef = useRef<ISeriesApi<"Line"> | null>(null);
 
   const candles = useSimulationStore((s) => s.candles);
   const currentIndex = useSimulationStore((s) => s.currentIndex);
@@ -35,7 +38,7 @@ export default function ChartWithIndicators() {
   const microNoiseEnabled = useSimulationStore((s) => s.microNoiseEnabled);
   const microTickCount = useSimulationStore((s) => s.microTickCount);
 
-  const { showVolume, showRSI, showMACD, movingAverages } = useIndicatorStore();
+  const { showVolume, showRSI, showMACD, showBollingerBands, movingAverages } = useIndicatorStore();
   const enabledMAs = useMemo(
     () => movingAverages.filter((ma) => ma.enabled),
     [movingAverages]
@@ -151,6 +154,31 @@ export default function ChartWithIndicators() {
     signalLineRef.current = signalLine;
     macdHistRef.current = macdHist;
 
+    // Bollinger Bands series (on main chart)
+    const bbUpper = mainChart.addSeries(LineSeries, {
+      color: "#a78bfa",
+      lineWidth: 1,
+      lineStyle: 2, // dashed
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    const bbMiddle = mainChart.addSeries(LineSeries, {
+      color: "#a78bfa",
+      lineWidth: 1,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    const bbLower = mainChart.addSeries(LineSeries, {
+      color: "#a78bfa",
+      lineWidth: 1,
+      lineStyle: 2, // dashed
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    bbUpperRef.current = bbUpper;
+    bbMiddleRef.current = bbMiddle;
+    bbLowerRef.current = bbLower;
+
     const handleResize = () => {
       const w = chartContainerRef.current?.clientWidth ?? 600;
       mainChart.applyOptions({ width: w });
@@ -245,6 +273,22 @@ export default function ChartWithIndicators() {
       }
     }
 
+    // Bollinger Bands
+    if (showBollingerBands && indicators.bollingerBands) {
+      const toLineData = (arr: (number | null)[]) =>
+        arr.slice(0, slice).reduce<{ time: Time; value: number }[]>((acc, val, i) => {
+          if (val !== null) acc.push({ time: candles[i].time as Time, value: val });
+          return acc;
+        }, []);
+      bbUpperRef.current?.setData(toLineData(indicators.bollingerBands.upper));
+      bbMiddleRef.current?.setData(toLineData(indicators.bollingerBands.middle));
+      bbLowerRef.current?.setData(toLineData(indicators.bollingerBands.lower));
+    } else {
+      bbUpperRef.current?.setData([]);
+      bbMiddleRef.current?.setData([]);
+      bbLowerRef.current?.setData([]);
+    }
+
     // RSI
     if (showRSI) {
       rsiSeriesRef.current?.setData(
@@ -284,7 +328,7 @@ export default function ChartWithIndicators() {
       signalLineRef.current?.setData([]);
       macdHistRef.current?.setData([]);
     }
-  }, [candles, currentIndex, indicators, showVolume, showRSI, showMACD, enabledMAs]);
+  }, [candles, currentIndex, indicators, showVolume, showRSI, showMACD, showBollingerBands, enabledMAs]);
 
   // Micro-tick: efficiently update just the last candle bar's close/high/low
   useEffect(() => {
