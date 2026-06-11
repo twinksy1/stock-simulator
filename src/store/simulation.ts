@@ -337,7 +337,7 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
   },
 
   buy: (quantity, plannedStop?, journal?) => {
-    const { cash, currentPrice, isLockedOut, riskSettings, closedTrades, currentIndex, isStudyPhase, candles } = get();
+    const { cash, isLockedOut, riskSettings, closedTrades, currentIndex, isStudyPhase, candles } = get();
     if (isStudyPhase) return false;
     if (isLockedOut) return false;
     if (!isMarketHours(candles, currentIndex)) return false;
@@ -348,9 +348,11 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
       if (currentIndex - lastClosed.exitCandleIndex < riskSettings.cooldownCandles) return false;
     }
 
+    // Use actual candle close price for execution (not micro-tick noise)
+    const realPrice = candles[currentIndex]?.close ?? 0;
     // Apply spread: buy at ask (slightly higher)
     const spreadMultiplier = 1 + (riskSettings.spreadBps / 10000);
-    const askPrice = currentPrice * spreadMultiplier;
+    const askPrice = realPrice * spreadMultiplier;
     const totalCost = askPrice * quantity + riskSettings.commissionPerTrade;
     if (totalCost > cash) return false;
 
@@ -358,7 +360,9 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
 
     const executeTrade = () => {
       const s = get();
-      const execPrice = s.currentPrice * spreadMultiplier;
+      // Always use real candle close price, not micro-tick interpolated price
+      const realExecPrice = s.candles[s.currentIndex]?.close ?? 0;
+      const execPrice = realExecPrice * spreadMultiplier;
       const execCost = execPrice * quantity + s.riskSettings.commissionPerTrade;
       if (execCost > s.cash) { set({ isPendingExecution: false }); return; }
 
@@ -407,9 +411,10 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
       if (!s.position || s.position.quantity < quantity) { set({ isPendingExecution: false }); return; }
 
       const mistakes = detectMistakes(s.trades, s.closedTrades, s.currentIndex, "sell", s.candles);
-      // Apply spread: sell at bid (slightly lower)
+      // Apply spread: sell at bid (slightly lower) — use real candle price, not micro-tick noise
       const spreadMultiplier = 1 - (s.riskSettings.spreadBps / 10000);
-      const execPrice = s.currentPrice * spreadMultiplier;
+      const realExecPrice = s.candles[s.currentIndex]?.close ?? 0;
+      const execPrice = realExecPrice * spreadMultiplier;
       const proceeds = execPrice * quantity - s.riskSettings.commissionPerTrade;
       const remaining = s.position.quantity - quantity;
       const newPosition: Position | null = remaining > 0 ? { ...s.position, quantity: remaining } : null;
@@ -451,10 +456,12 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
   setRiskSettings: (settings) => set({ riskSettings: { ...get().riskSettings, ...settings } }),
   updatePlannedStop: (stop) => { const { position } = get(); if (position) set({ position: { ...position, plannedStop: stop } }); },
   calculateMaxShares: (stopPrice) => {
-    const { currentPrice, cash, startingCash, riskSettings } = get();
-    if (stopPrice >= currentPrice) return 0;
+    const { candles, currentIndex, cash, startingCash, riskSettings } = get();
+    // Use real candle price for position sizing, not micro-tick noise
+    const realPrice = candles[currentIndex]?.close ?? 0;
+    if (stopPrice >= realPrice) return 0;
     const maxRiskDollars = (riskSettings.maxRiskPercent / 100) * startingCash;
-    return Math.min(Math.floor(maxRiskDollars / (currentPrice - stopPrice)), Math.floor(cash / currentPrice));
+    return Math.min(Math.floor(maxRiskDollars / (realPrice - stopPrice)), Math.floor(cash / realPrice));
   },
   setScarcityMode: (enabled) => set({ scarcityMode: enabled }),
   setMicroNoise: (enabled, ticksPerCandle?) => set({ microNoiseEnabled: enabled, microTicksPerCandle: ticksPerCandle ?? get().microTicksPerCandle, microTickCount: 0, microPath: [] }),
