@@ -61,7 +61,8 @@ interface SimulationState {
     events?: MacroEvent[],
     regimes?: { startIndex: number; regime: MarketRegime }[],
     correlatedSymbols?: CorrelatedSymbol[],
-    contextEndIndex?: number
+    contextEndIndex?: number,
+    startBalance?: number
   ) => void;
   goLive: () => void;
   tick: () => void;
@@ -85,7 +86,7 @@ interface SimulationState {
   reset: () => void;
 }
 
-const STARTING_CASH = 10000;
+const STARTING_CASH = 70000;
 
 const DEFAULT_RISK_SETTINGS: RiskSettings = {
   maxRiskPercent: 2,
@@ -107,6 +108,75 @@ function calculatePnl(state: {
     ? state.position.quantity * state.currentPrice
     : 0;
   return state.cash + positionValue - state.startingCash;
+}
+
+// Auto stop-loss: triggers only on candle close price
+function checkAutoStopLoss(get: () => SimulationState, set: (partial: Partial<SimulationState>) => void) {
+  const s = get();
+  if (!s.position || !s.position.plannedStop || s.isStudyPhase || s.isPendingExecution) return;
+
+  // Use the finalized candle close price, not micro-tick noise
+  const candle = s.candles[s.currentIndex];
+  if (!candle) return;
+  const price = candle.close;
+  const stop = s.position.plannedStop;
+
+  // For long positions: trigger if candle close drops to or below stop
+  if (price > stop) return;
+
+  const quantity = s.position.quantity;
+  const spreadMultiplier = 1 - (s.riskSettings.spreadBps / 10000);
+  // Execute at stop price (or current price if it gapped below)
+  const execPrice = Math.min(price, stop) * spreadMultiplier;
+  const proceeds = execPrice * quantity - s.riskSettings.commissionPerTrade;
+  const tradePnl = (execPrice - s.position.avgPrice) * quantity - (s.riskSettings.commissionPerTrade * 2);
+  const newRealizedPnl = s.realizedPnl + tradePnl;
+
+  const entryTrades = s.trades.filter((t) => t.side === "buy");
+  const lastEntry = entryTrades[entryTrades.length - 1];
+
+  const closedTrade: ClosedTrade = {
+    id: `closed-sl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    symbol: s.symbol,
+    entryPrice: s.position.avgPrice,
+    exitPrice: execPrice,
+    quantity,
+    entryTime: lastEntry?.time ?? 0,
+    exitTime: s.candles[s.currentIndex]?.time ?? 0,
+    entryCandleIndex: lastEntry?.candleIndex ?? 0,
+    exitCandleIndex: s.currentIndex,
+    plannedStop: s.position.plannedStop,
+    rMultiple: (execPrice - s.position.avgPrice) / (s.position.avgPrice - stop),
+    realizedPnl: tradePnl,
+    journal: { exitReason: "Auto stop-loss triggered" },
+    mistakes: [],
+    holdDuration: s.currentIndex - (lastEntry?.candleIndex ?? 0),
+    regime: s.regimes.length > 0 ? s.regimes.reduce((c, r) => r.startIndex <= s.currentIndex ? r : c, s.regimes[0]).regime : undefined,
+  };
+
+  const trade: Trade = {
+    id: `${Date.now()}-sl-${Math.random().toString(36).slice(2, 8)}`,
+    side: "sell",
+    price: execPrice,
+    quantity,
+    time: s.candles[s.currentIndex]?.time ?? 0,
+    candleIndex: s.currentIndex,
+    journal: { exitReason: "Auto stop-loss triggered" },
+  };
+
+  const newCash = s.cash + proceeds;
+  const lossLimit = (s.riskSettings.dailyLossLimitPercent / 100) * s.startingCash;
+
+  set({
+    cash: newCash,
+    position: null,
+    trades: [...s.trades, trade],
+    closedTrades: [...s.closedTrades, closedTrade],
+    realizedPnl: newRealizedPnl,
+    isLockedOut: newRealizedPnl <= -lossLimit,
+    isPendingExecution: false,
+    pnl: calculatePnl({ cash: newCash, startingCash: s.startingCash, position: null, currentPrice: s.currentPrice }),
+  });
 }
 
 function isMarketHours(candles: Candle[], currentIndex: number): boolean {
@@ -269,11 +339,12 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
   postSessionReflection: null,
   sessionEnded: false,
 
-  loadSession: (symbol, date, candles, events = [], regimes = [], correlatedSymbols = [], contextEndIndex = 0) => {
+  loadSession: (symbol, date, candles, events = [], regimes = [], correlatedSymbols = [], contextEndIndex = 0, startBalance) => {
+    const balance = startBalance ?? STARTING_CASH;
     const startIndex = contextEndIndex > 0 ? contextEndIndex : Math.min(50, Math.max(0, candles.length - 1));
     set({
       symbol, date, candles, currentIndex: startIndex, isPlaying: false, speed: 1,
-      cash: STARTING_CASH, startingCash: STARTING_CASH, position: null,
+      cash: balance, startingCash: balance, position: null,
       trades: [], closedTrades: [], realizedPnl: 0, isLockedOut: false,
       isPendingExecution: false, events, regimes, correlatedSymbols,
       currentPrice: candles.length > 0 ? candles[startIndex]?.close ?? candles[0].close : 0, pnl: 0,
@@ -299,17 +370,15 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
     }
 
     if (!microNoiseEnabled) {
-      // Original behavior: advance one full candle per tick
       const nextIndex = currentIndex + 1;
       const price = candles[nextIndex].close;
       const s = get();
       set({ currentIndex: nextIndex, currentPrice: price, pnl: calculatePnl({ cash: s.cash, startingCash: s.startingCash, position: s.position, currentPrice: price }) });
+      checkAutoStopLoss(get, set);
       return;
     }
 
-    // Micro-tick mode: sub-tick price jitter within current candle
     if (microTickCount === 0 || microPath.length === 0) {
-      // Starting a new candle — generate the micro path for the NEXT candle
       const nextCandle = candles[currentIndex + 1];
       const path = generateMicroPath(nextCandle, microTicksPerCandle);
       const price = path[0];
@@ -321,7 +390,6 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
         pnl: calculatePnl({ cash: s.cash, startingCash: s.startingCash, position: s.position, currentPrice: price }),
       });
     } else if (microTickCount < microTicksPerCandle - 1) {
-      // Mid-candle: advance to next micro-tick price
       const price = microPath[microTickCount];
       const s = get();
       set({
@@ -330,7 +398,7 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
         pnl: calculatePnl({ cash: s.cash, startingCash: s.startingCash, position: s.position, currentPrice: price }),
       });
     } else {
-      // Last micro-tick: finalize candle — advance index, reset micro state
+      // Last micro-tick: candle finalizes — check stop loss on close price
       const nextIndex = currentIndex + 1;
       const price = candles[nextIndex].close;
       const s = get();
@@ -341,6 +409,7 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
         microPath: [],
         pnl: calculatePnl({ cash: s.cash, startingCash: s.startingCash, position: s.position, currentPrice: price }),
       });
+      checkAutoStopLoss(get, set);
     }
   },
 

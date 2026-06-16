@@ -31,6 +31,7 @@ export default function ChartWithIndicators() {
   const bbUpperRef = useRef<ISeriesApi<"Line"> | null>(null);
   const bbMiddleRef = useRef<ISeriesApi<"Line"> | null>(null);
   const bbLowerRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const vwapSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
 
   const candles = useSimulationStore((s) => s.candles);
   const currentIndex = useSimulationStore((s) => s.currentIndex);
@@ -38,7 +39,7 @@ export default function ChartWithIndicators() {
   const microNoiseEnabled = useSimulationStore((s) => s.microNoiseEnabled);
   const microTickCount = useSimulationStore((s) => s.microTickCount);
 
-  const { showVolume, showRSI, showMACD, showBollingerBands, movingAverages } = useIndicatorStore();
+  const { showVolume, showRSI, showMACD, showBollingerBands, showVWAP, movingAverages } = useIndicatorStore();
   const enabledMAs = useMemo(
     () => movingAverages.filter((ma) => ma.enabled),
     [movingAverages]
@@ -47,10 +48,9 @@ export default function ChartWithIndicators() {
   // Compute indicators for the full dataset
   const indicators = useMemo(() => {
     if (candles.length === 0) return null;
-    const allPeriods = movingAverages.map((ma) => ma.period);
-    return computeIndicators(candles, allPeriods);
+    return computeIndicators(candles, movingAverages);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candles, movingAverages.map((m) => m.period).join(",")]);
+  }, [candles, movingAverages.map((m) => `${m.id}:${m.type}:${m.period}`).join(",")]);
 
   // Create all three charts once
   useEffect(() => {
@@ -179,6 +179,15 @@ export default function ChartWithIndicators() {
     bbMiddleRef.current = bbMiddle;
     bbLowerRef.current = bbLower;
 
+    // VWAP series (on main chart)
+    const vwapSeries = mainChart.addSeries(LineSeries, {
+      color: "#fbbf24",
+      lineWidth: 2,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    vwapSeriesRef.current = vwapSeries;
+
     const handleResize = () => {
       const w = chartContainerRef.current?.clientWidth ?? 600;
       mainChart.applyOptions({ width: w });
@@ -259,10 +268,10 @@ export default function ChartWithIndicators() {
     // Moving averages
     for (const ma of enabledMAs) {
       const series = maSeriesMapRef.current.get(ma.id);
-      const smaLine = indicators.smaLines.find((s) => s.period === ma.period);
-      if (series && smaLine) {
+      const maLine = indicators.maLines.find((s) => s.id === ma.id);
+      if (series && maLine) {
         series.setData(
-          smaLine.values.slice(0, slice).reduce<{ time: Time; value: number }[]>(
+          maLine.values.slice(0, slice).reduce<{ time: Time; value: number }[]>(
             (acc, val, i) => {
               if (val !== null) acc.push({ time: candles[i].time as Time, value: val });
               return acc;
@@ -271,6 +280,18 @@ export default function ChartWithIndicators() {
           )
         );
       }
+    }
+
+    // VWAP
+    if (showVWAP) {
+      vwapSeriesRef.current?.setData(
+        indicators.vwap.slice(0, slice).reduce<{ time: Time; value: number }[]>((acc, val, i) => {
+          if (val !== null) acc.push({ time: candles[i].time as Time, value: val });
+          return acc;
+        }, [])
+      );
+    } else {
+      vwapSeriesRef.current?.setData([]);
     }
 
     // Bollinger Bands
@@ -328,7 +349,7 @@ export default function ChartWithIndicators() {
       signalLineRef.current?.setData([]);
       macdHistRef.current?.setData([]);
     }
-  }, [candles, currentIndex, indicators, showVolume, showRSI, showMACD, showBollingerBands, enabledMAs]);
+  }, [candles, currentIndex, indicators, showVolume, showRSI, showMACD, showBollingerBands, showVWAP, enabledMAs]);
 
   // Micro-tick: efficiently update just the last candle bar's close/high/low
   useEffect(() => {

@@ -21,6 +21,7 @@ export default function SessionSetup() {
   const [days, setDays] = useState(3);
   const [contextDays, setContextDays] = useState(5);
   const [scarcityMode, setScarcityMode] = useState(false);
+  const [startBalance, setStartBalance] = useState(70000);
   const loadSession = useSimulationStore((s) => s.loadSession);
   const setScarcity = useSimulationStore((s) => s.setScarcityMode);
 
@@ -29,10 +30,9 @@ export default function SessionSetup() {
     const basePrice = BASE_PRICES[symbol] ?? 150;
     const totalDays = contextDays + days;
     const session = generateMultiDayData(symbol, date, basePrice, totalDays, scarcityMode);
-    // Context ends after contextDays worth of candles (660 candles per day)
     const contextEndIndex = contextDays * 660;
     setScarcity(scarcityMode);
-    loadSession(symbol, date, session.candles, session.events, session.regimes, session.correlatedSymbols, contextEndIndex);
+    loadSession(symbol, date, session.candles, session.events, session.regimes, session.correlatedSymbols, contextEndIndex, startBalance);
   };
 
   const handleRandom = () => {
@@ -44,7 +44,7 @@ export default function SessionSetup() {
     const session = generateMultiDayData(randomSymbol, date, basePrice, totalDays, scarcityMode);
     const contextEndIndex = contextDays * 660;
     setScarcity(scarcityMode);
-    loadSession(randomSymbol, date, session.candles, session.events, session.regimes, session.correlatedSymbols, contextEndIndex);
+    loadSession(randomSymbol, date, session.candles, session.events, session.regimes, session.correlatedSymbols, contextEndIndex, startBalance);
   };
 
   return (
@@ -96,6 +96,38 @@ export default function SessionSetup() {
           <p className="text-[10px] text-slate-500 mt-0.5">
             Study context before going live — like a real premarket routine
           </p>
+        </div>
+
+        {/* Starting Balance */}
+        <div>
+          <label className="text-slate-400 text-xs uppercase tracking-wide">Starting Balance</label>
+          <div className="relative mt-1">
+            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm">$</span>
+            <input
+              type="number"
+              min={1000}
+              max={10000000}
+              step={1000}
+              value={startBalance}
+              onChange={(e) => setStartBalance(Number(e.target.value))}
+              className="w-full bg-slate-900 border border-slate-600 rounded px-3 py-2 pl-7 text-white font-mono focus:outline-none focus:border-blue-500"
+            />
+          </div>
+          <div className="flex gap-1.5 mt-1.5">
+            {[10000, 25000, 50000, 70000, 100000].map((v) => (
+              <button
+                key={v}
+                onClick={() => setStartBalance(v)}
+                className={`text-[10px] px-1.5 py-0.5 rounded transition-colors ${
+                  startBalance === v
+                    ? "bg-blue-600 text-white"
+                    : "bg-slate-700 text-slate-400 hover:text-white"
+                }`}
+              >
+                {v >= 1000 ? `${v / 1000}k` : v}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Scarcity Mode toggle */}

@@ -1,5 +1,6 @@
-import { SMA, RSI, MACD, BollingerBands } from "technicalindicators";
+import { SMA, EMA, WMA, WEMA, RSI, MACD, BollingerBands, VWAP } from "technicalindicators";
 import type { Candle } from "@/types/market";
+import type { MovingAverageConfig } from "@/store/indicators";
 
 export interface BollingerBandData {
   upper: (number | null)[];
@@ -7,31 +8,51 @@ export interface BollingerBandData {
   lower: (number | null)[];
 }
 
+export interface MALineData {
+  id: string;
+  period: number;
+  type: string;
+  values: (number | null)[];
+}
+
 export interface IndicatorData {
-  smaLines: { period: number; values: (number | null)[] }[];
+  maLines: MALineData[];
   rsi: (number | null)[];
   macd: { macd: number | null; signal: number | null; histogram: number | null }[];
   bollingerBands: BollingerBandData;
+  vwap: (number | null)[];
+}
+
+function computeMA(type: string, period: number, values: number[]): number[] {
+  if (period > values.length) return [];
+  switch (type) {
+    case "ema":
+      return EMA.calculate({ period, values });
+    case "wma":
+      return WMA.calculate({ period, values });
+    case "wema":
+      return WEMA.calculate({ period, values });
+    case "sma":
+    default:
+      return SMA.calculate({ period, values });
+  }
 }
 
 /**
- * Computes all indicators from candle close prices.
+ * Computes all indicators from candle data.
  * Returns arrays aligned to the candle array (padded with null for warmup periods).
  */
-export function computeIndicators(candles: Candle[], maPeriods: number[]): IndicatorData {
+export function computeIndicators(candles: Candle[], maConfigs: MovingAverageConfig[]): IndicatorData {
   const closes = candles.map((c) => c.close);
 
-  // SMAs for each requested period
-  const smaLines = maPeriods.map((period) => {
-    if (period > closes.length) {
-      return { period, values: Array(closes.length).fill(null) as (number | null)[] };
-    }
-    const raw = SMA.calculate({ period, values: closes });
+  // Moving averages (SMA, EMA, WMA, WEMA) for each config
+  const maLines: MALineData[] = maConfigs.map((config) => {
+    const raw = computeMA(config.type, config.period, closes);
     const values: (number | null)[] = [
       ...Array(closes.length - raw.length).fill(null),
       ...raw,
     ];
-    return { period, values };
+    return { id: config.id, period: config.period, type: config.type, values };
   });
 
   // RSI 14
@@ -78,5 +99,18 @@ export function computeIndicators(candles: Candle[], maPeriods: number[]): Indic
     ],
   };
 
-  return { smaLines, rsi, macd, bollingerBands };
+  // VWAP (resets each day — uses full period here for simplicity)
+  const vwapRaw = VWAP.calculate({
+    high: candles.map((c) => c.high),
+    low: candles.map((c) => c.low),
+    close: candles.map((c) => c.close),
+    volume: candles.map((c) => c.volume),
+  });
+  const vwapPadding = closes.length - vwapRaw.length;
+  const vwap: (number | null)[] = [
+    ...Array(vwapPadding).fill(null),
+    ...vwapRaw,
+  ];
+
+  return { maLines, rsi, macd, bollingerBands, vwap };
 }
