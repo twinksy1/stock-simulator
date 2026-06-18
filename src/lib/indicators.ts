@@ -1,6 +1,38 @@
-import { SMA, EMA, WMA, WEMA, RSI, MACD, BollingerBands, VWAP } from "technicalindicators";
+import { SMA, EMA, WMA, WEMA, RSI, MACD, BollingerBands } from "technicalindicators";
 import type { Candle } from "@/types/market";
 import type { MovingAverageConfig } from "@/store/indicators";
+
+/**
+ * Computes VWAP with daily resets by detecting day boundaries from candle timestamps.
+ * Each new calendar day (ET) resets the cumulative totals.
+ */
+function computeDailyVWAP(candles: Candle[]): (number | null)[] {
+  const result: (number | null)[] = [];
+  let cumTypicalPriceVolume = 0;
+  let cumVolume = 0;
+  let currentDay = -1;
+
+  for (const candle of candles) {
+    const d = new Date(candle.time * 1000);
+    // Use en-CA locale for YYYY-MM-DD format in Eastern Time
+    const etDay = d.toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+    const dayNum = parseInt(etDay.replace(/-/g, ""), 10);
+
+    if (dayNum !== currentDay) {
+      cumTypicalPriceVolume = 0;
+      cumVolume = 0;
+      currentDay = dayNum;
+    }
+
+    const typicalPrice = (candle.high + candle.low + candle.close) / 3;
+    cumTypicalPriceVolume += typicalPrice * candle.volume;
+    cumVolume += candle.volume;
+
+    result.push(cumVolume > 0 ? cumTypicalPriceVolume / cumVolume : null);
+  }
+
+  return result;
+}
 
 export interface BollingerBandData {
   upper: (number | null)[];
@@ -99,18 +131,8 @@ export function computeIndicators(candles: Candle[], maConfigs: MovingAverageCon
     ],
   };
 
-  // VWAP (resets each day — uses full period here for simplicity)
-  const vwapRaw = VWAP.calculate({
-    high: candles.map((c) => c.high),
-    low: candles.map((c) => c.low),
-    close: candles.map((c) => c.close),
-    volume: candles.map((c) => c.volume),
-  });
-  const vwapPadding = closes.length - vwapRaw.length;
-  const vwap: (number | null)[] = [
-    ...Array(vwapPadding).fill(null),
-    ...vwapRaw,
-  ];
+  // VWAP — resets at each new trading day
+  const vwap: (number | null)[] = computeDailyVWAP(candles);
 
   return { maLines, rsi, macd, bollingerBands, vwap };
 }

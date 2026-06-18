@@ -61,17 +61,15 @@ export default function ChartWithIndicators() {
       layout: { background: { color: "#0f172a" }, textColor: "#94a3b8" },
       grid: { vertLines: { color: "#1e293b" }, horzLines: { color: "#1e293b" } },
       timeScale: {
-        timeVisible: true,
+        timeVisible: false,
         secondsVisible: false,
-        tickMarkFormatter: (time: number) => {
-          const d = new Date(time * 1000);
-          return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: "America/New_York" });
+        tickMarkFormatter: (_time: number, _tickMarkType: number, _locale: string) => {
+          return "";
         },
       },
       localization: {
-        timeFormatter: (time: number) => {
-          const d = new Date(time * 1000);
-          return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true, timeZone: "America/New_York" }) + " ET";
+        timeFormatter: () => {
+          return "";
         },
       },
     };
@@ -443,7 +441,7 @@ export default function ChartWithIndicators() {
                 className="inline-block w-3 h-0.5 mr-1 align-middle"
                 style={{ backgroundColor: ma.color }}
               />
-              SMA {ma.period}
+              {ma.type.toUpperCase()} {ma.period}
             </span>
           ))}
         </div>

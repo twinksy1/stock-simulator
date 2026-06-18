@@ -1,6 +1,5 @@
 "use client";
 
-import { useMemo } from "react";
 import { useSimulationStore } from "@/store/simulation";
 import type { MarketRegime } from "@/types/market";
 
@@ -12,31 +11,21 @@ const REGIME_CONFIG: Record<MarketRegime, { label: string; color: string; emoji:
   "high-volatility": { label: "High Vol", color: "text-orange-400", emoji: "⚡" },
 };
 
+function formatMarketCap(val: number | null): string {
+  if (val == null) return "—";
+  if (val >= 1e12) return `$${(val / 1e12).toFixed(1)}T`;
+  if (val >= 1e9) return `$${(val / 1e9).toFixed(1)}B`;
+  if (val >= 1e6) return `$${(val / 1e6).toFixed(0)}M`;
+  return `$${val.toLocaleString()}`;
+}
+
 export default function MarketContextBar() {
   const getCurrentRegime = useSimulationStore((s) => s.getCurrentRegime);
-  const getActiveEvent = useSimulationStore((s) => s.getActiveEvent);
-  const correlatedSymbols = useSimulationStore((s) => s.correlatedSymbols);
-  const currentIndex = useSimulationStore((s) => s.currentIndex);
-  const candles = useSimulationStore((s) => s.candles);
+  const yahooInsights = useSimulationStore((s) => s.yahooInsights);
 
   const regime = getCurrentRegime();
-  const activeEvent = getActiveEvent();
   const regimeConfig = REGIME_CONFIG[regime];
-
-  const { corrChanges, mainChange } = useMemo(() => {
-    const corrChanges = correlatedSymbols.map((cs) => {
-      if (currentIndex === 0 || currentIndex >= cs.candles.length) return { symbol: cs.symbol, change: 0, correlation: cs.correlation };
-      const prev = cs.candles[Math.max(0, currentIndex - 1)].close;
-      const curr = cs.candles[currentIndex].close;
-      return { symbol: cs.symbol, change: ((curr - prev) / prev) * 100, correlation: cs.correlation };
-    });
-
-    const mainChange = currentIndex > 0 && candles.length > currentIndex
-      ? ((candles[currentIndex].close - candles[currentIndex - 1].close) / candles[currentIndex - 1].close) * 100
-      : 0;
-
-    return { corrChanges, mainChange };
-  }, [correlatedSymbols, currentIndex, candles]);
+  const outlook = yahooInsights?.technicalOutlook;
 
   return (
     <div className="bg-slate-800 rounded-lg px-3 py-2 border border-slate-700 space-y-1.5">
@@ -49,49 +38,79 @@ export default function MarketContextBar() {
           </span>
         </div>
 
-        {/* Separator */}
-        <span className="w-px h-4 bg-slate-600" />
-
-        {/* Sector correlation mini-view */}
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] uppercase tracking-wider text-slate-500">Sector</span>
-          {corrChanges.slice(0, 3).map((cs) => (
-            <span key={cs.symbol} className="text-[11px] font-mono">
-              <span className="text-slate-400">{cs.symbol}</span>{" "}
-              <span className={cs.change >= 0 ? "text-green-400" : "text-red-400"}>
-                {cs.change >= 0 ? "+" : ""}{cs.change.toFixed(2)}%
+        {/* Yahoo quote context */}
+        {yahooInsights?.quote && (
+          <>
+            <span className="w-px h-4 bg-slate-600" />
+            <div className="flex items-center gap-3 flex-wrap">
+              <span className="text-[11px] font-mono text-slate-300">
+                {yahooInsights.quote.shortName}
               </span>
+              {yahooInsights.quote.marketCap != null && (
+                <span className="text-[11px] font-mono text-slate-400">
+                  MCap {formatMarketCap(yahooInsights.quote.marketCap)}
+                </span>
+              )}
+              {yahooInsights.quote.trailingPE != null && (
+                <span className="text-[11px] font-mono text-slate-400">
+                  P/E {yahooInsights.quote.trailingPE.toFixed(1)}
+                </span>
+              )}
+              {yahooInsights.quote.fiftyDayAverage != null && (
+                <span className="text-[11px] font-mono text-slate-400">
+                  50d ${yahooInsights.quote.fiftyDayAverage.toFixed(2)}
+                </span>
+              )}
+              {yahooInsights.quote.twoHundredDayAverage != null && (
+                <span className="text-[11px] font-mono text-slate-400">
+                  200d ${yahooInsights.quote.twoHundredDayAverage.toFixed(2)}
+                </span>
+              )}
+              {yahooInsights.quote.fiftyTwoWeekHigh != null && yahooInsights.quote.fiftyTwoWeekLow != null && (
+                <span className="text-[11px] font-mono text-slate-400">
+                  52w ${yahooInsights.quote.fiftyTwoWeekLow.toFixed(2)}–${yahooInsights.quote.fiftyTwoWeekHigh.toFixed(2)}
+                </span>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* Yahoo technical outlook */}
+      {outlook && (
+        <div className="flex items-center gap-3 flex-wrap text-[11px]">
+          <span className="text-[10px] uppercase tracking-wider text-slate-500">Yahoo Outlook</span>
+          {outlook.shortTermOutlook && (
+            <span className={`font-mono ${
+              outlook.shortTermOutlook.direction === "Bullish" ? "text-green-400" :
+              outlook.shortTermOutlook.direction === "Bearish" ? "text-red-400" : "text-slate-400"
+            }`}>
+              Short: {outlook.shortTermOutlook.scoreDescription ?? outlook.shortTermOutlook.direction}
             </span>
-          ))}
-          {candles.length > 0 && (
-            <span className="text-[10px] text-slate-500 font-mono">
-              (you: {mainChange >= 0 ? "+" : ""}{mainChange.toFixed(2)}%)
+          )}
+          {outlook.intermediateTermOutlook && (
+            <span className={`font-mono ${
+              outlook.intermediateTermOutlook.direction === "Bullish" ? "text-green-400" :
+              outlook.intermediateTermOutlook.direction === "Bearish" ? "text-red-400" : "text-slate-400"
+            }`}>
+              Mid: {outlook.intermediateTermOutlook.scoreDescription ?? outlook.intermediateTermOutlook.direction}
+            </span>
+          )}
+          {outlook.longTermOutlook && (
+            <span className={`font-mono ${
+              outlook.longTermOutlook.direction === "Bullish" ? "text-green-400" :
+              outlook.longTermOutlook.direction === "Bearish" ? "text-red-400" : "text-slate-400"
+            }`}>
+              Long: {outlook.longTermOutlook.scoreDescription ?? outlook.longTermOutlook.direction}
             </span>
           )}
         </div>
-      </div>
+      )}
 
-      {/* Active event banner */}
-      {activeEvent && (
-        <div className={`flex items-center gap-2 px-2 py-1 rounded text-xs ${
-          activeEvent.impact === "bullish"
-            ? "bg-green-900/30 border border-green-700/50 text-green-300"
-            : activeEvent.impact === "bearish"
-            ? "bg-red-900/30 border border-red-700/50 text-red-300"
-            : "bg-slate-700/50 border border-slate-600 text-slate-300"
-        }`}>
-          <span className="font-semibold">
-            {activeEvent.type === "earnings" && "💰"}
-            {activeEvent.type === "fed-speech" && "🏛️"}
-            {activeEvent.type === "cpi-report" && "📊"}
-            {activeEvent.type === "layoffs" && "📋"}
-            {activeEvent.type === "product-launch" && "🚀"}
-            {activeEvent.type === "lawsuit" && "⚖️"}
-          </span>
-          <span>{activeEvent.headline}</span>
-          <span className="ml-auto text-[10px] opacity-70">
-            {activeEvent.volatilityMultiplier.toFixed(1)}x vol
-          </span>
+      {/* No data placeholder */}
+      {!yahooInsights && (
+        <div className="text-[11px] text-slate-500">
+          Loading market context...
         </div>
       )}
     </div>

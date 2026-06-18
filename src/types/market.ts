@@ -157,6 +157,27 @@ export interface PostSessionReflection {
 
 export type PlaybackSpeed = 1 | 2 | 5 | 10;
 
+export interface YahooInsights {
+  regime: MarketRegime;
+  technicalOutlook: {
+    shortTermOutlook?: { direction: string; score: number; scoreDescription: string; stateDescription: string };
+    intermediateTermOutlook?: { direction: string; score: number; scoreDescription: string; stateDescription: string };
+    longTermOutlook?: { direction: string; score: number; scoreDescription: string; stateDescription: string };
+  } | null;
+  recommendation: { rating: string; targetPrice: number } | null;
+  quote: {
+    marketCap: number | null;
+    trailingPE: number | null;
+    forwardPE: number | null;
+    fiftyDayAverage: number | null;
+    twoHundredDayAverage: number | null;
+    fiftyTwoWeekHigh: number | null;
+    fiftyTwoWeekLow: number | null;
+    averageVolume: number | null;
+    shortName: string;
+  } | null;
+}
+
 export interface SimSession {
   symbol: string;
   date: string;

@@ -22,7 +22,8 @@ export default function Home() {
   const isPendingExecution = useSimulationStore((s) => s.isPendingExecution);
   const isStudyPhase = useSimulationStore((s) => s.isStudyPhase);
   const goLive = useSimulationStore((s) => s.goLive);
-  const contextEndIndex = useSimulationStore((s) => s.contextEndIndex);
+  const contextInterval = useSimulationStore((s) => s.contextInterval);
+  const tradingInterval = useSimulationStore((s) => s.date);
   const showPreSession = useSimulationStore((s) => s.showPreSession);
   const showPostSession = useSimulationStore((s) => s.showPostSession);
   const submitPreSession = useSimulationStore((s) => s.submitPreSession);
@@ -52,11 +53,13 @@ export default function Home() {
                 <div className="flex items-center justify-between">
                   <div>
                     <h3 className="text-indigo-200 font-semibold text-sm flex items-center gap-2">
-                      📖 Study Phase — Analyze Historical Context
+                      📖 Study Phase — {contextInterval === "1d" ? "Daily" : contextInterval === "1h" ? "Hourly" : contextInterval ? `${contextInterval} ` : ""}Chart Context
                     </h3>
                     <p className="text-indigo-300/70 text-xs mt-1">
-                      Scroll through {Math.round(contextEndIndex / 660)} days of prior history. Study trend, support/resistance, volume, and indicators.
-                      No trading allowed yet — when ready, go live.
+                      {contextInterval && contextInterval !== tradingInterval
+                        ? `You're viewing ${contextInterval === "1d" ? "daily" : contextInterval === "1h" ? "hourly" : contextInterval} candles for trend context. When you go live, the chart switches to ${tradingInterval} candles for trading.`
+                        : "Scroll through prior price action for context. When you go live, the chart continues forward with new candles."}
+                      {" "}No trading allowed yet — when ready, go live.
                     </p>
                   </div>
                   <button

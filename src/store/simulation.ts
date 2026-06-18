@@ -9,12 +9,11 @@ import type {
   RiskSettings,
   TradeJournal,
   MistakeType,
-  MacroEvent,
   MarketRegime,
-  CorrelatedSymbol,
   SessionScore,
   PreSessionReflection,
   PostSessionReflection,
+  YahooInsights,
 } from "@/types/market";
 
 interface SimulationState {
@@ -33,19 +32,21 @@ interface SimulationState {
   realizedPnl: number;
   isLockedOut: boolean;
   isPendingExecution: boolean;
-  events: MacroEvent[];
   regimes: { startIndex: number; regime: MarketRegime }[];
-  correlatedSymbols: CorrelatedSymbol[];
-  scarcityMode: boolean;
   currentPrice: number;
   pnl: number;
   contextEndIndex: number;
   isStudyPhase: boolean;
+  // Dual-timeframe: higher-TF context for study, separate trading candles
+  contextCandles: Candle[];
+  contextInterval: string;
+  tradingCandlesStored: Candle[];
+  tradingStartOffset: number; // Where live trading begins within tradingCandlesStored (lookback before this)
   // Micro-tick noise
   microNoiseEnabled: boolean;
-  microTicksPerCandle: number; // how many sub-ticks per candle (4/8/16)
-  microTickCount: number; // current position within micro-tick sequence
-  microPath: number[]; // pre-generated price path for current candle
+  microTicksPerCandle: number;
+  microTickCount: number;
+  microPath: number[];
 
   // Pre/Post session reflection
   showPreSession: boolean;
@@ -54,15 +55,18 @@ interface SimulationState {
   postSessionReflection: PostSessionReflection | null;
   sessionEnded: boolean;
 
+  // Yahoo insights for real data sessions
+  yahooInsights: YahooInsights | null;
+
   loadSession: (
     symbol: string,
     date: string,
     candles: Candle[],
-    events?: MacroEvent[],
-    regimes?: { startIndex: number; regime: MarketRegime }[],
-    correlatedSymbols?: CorrelatedSymbol[],
     contextEndIndex?: number,
-    startBalance?: number
+    startBalance?: number,
+    contextCandles?: Candle[],
+    contextInterval?: string,
+    tradingStartOffset?: number
   ) => void;
   goLive: () => void;
   tick: () => void;
@@ -75,14 +79,13 @@ interface SimulationState {
   setRiskSettings: (settings: Partial<RiskSettings>) => void;
   updatePlannedStop: (stop: number | undefined) => void;
   calculateMaxShares: (stopPrice: number) => number;
-  setScarcityMode: (enabled: boolean) => void;
   setMicroNoise: (enabled: boolean, ticksPerCandle?: number) => void;
   submitPreSession: (reflection: PreSessionReflection) => void;
   submitPostSession: (reflection: PostSessionReflection) => void;
   dismissPostSession: () => void;
+  setYahooInsights: (insights: YahooInsights) => void;
   getSessionScore: () => SessionScore;
   getCurrentRegime: () => MarketRegime;
-  getActiveEvent: () => MacroEvent | null;
   reset: () => void;
 }
 
@@ -321,14 +324,15 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
   realizedPnl: 0,
   isLockedOut: false,
   isPendingExecution: false,
-  events: [],
   regimes: [],
-  correlatedSymbols: [],
-  scarcityMode: false,
   currentPrice: 0,
   pnl: 0,
   contextEndIndex: 0,
   isStudyPhase: false,
+  contextCandles: [],
+  contextInterval: "",
+  tradingCandlesStored: [],
+  tradingStartOffset: 0,
   microNoiseEnabled: true,
   microTicksPerCandle: 8,
   microTickCount: 0,
@@ -338,19 +342,50 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
   preSessionReflection: null,
   postSessionReflection: null,
   sessionEnded: false,
+  yahooInsights: null,
 
-  loadSession: (symbol, date, candles, events = [], regimes = [], correlatedSymbols = [], contextEndIndex = 0, startBalance) => {
+  loadSession: (symbol, date, candles, contextEndIndex = 0, startBalance, contextCandles, contextInterval, tradingStartOffset = 0) => {
     const balance = startBalance ?? STARTING_CASH;
-    const startIndex = contextEndIndex > 0 ? contextEndIndex : Math.min(50, Math.max(0, candles.length - 1));
-    set({
-      symbol, date, candles, currentIndex: startIndex, isPlaying: false, speed: 1,
-      cash: balance, startingCash: balance, position: null,
-      trades: [], closedTrades: [], realizedPnl: 0, isLockedOut: false,
-      isPendingExecution: false, events, regimes, correlatedSymbols,
-      currentPrice: candles.length > 0 ? candles[startIndex]?.close ?? candles[0].close : 0, pnl: 0,
-      contextEndIndex: startIndex,
-      isStudyPhase: contextEndIndex > 0,
-    });
+
+    if (contextCandles && contextCandles.length > 0) {
+      // Dual-TF mode: show higher-TF context during study, store trading candles for swap on go-live
+      const startIdx = contextCandles.length - 1;
+      set({
+        symbol, date,
+        candles: contextCandles,
+        contextCandles,
+        contextInterval: contextInterval || date,
+        tradingCandlesStored: candles,
+        tradingStartOffset,
+        currentIndex: startIdx,
+        isPlaying: false, speed: 1,
+        cash: balance, startingCash: balance, position: null,
+        trades: [], closedTrades: [], realizedPnl: 0, isLockedOut: false,
+        isPendingExecution: false, regimes: [],
+        currentPrice: contextCandles[startIdx].close, pnl: 0,
+        contextEndIndex: startIdx,
+        isStudyPhase: true,
+        yahooInsights: null,
+      });
+    } else {
+      // Single-TF mode (1d or fallback): study + trading on same candle series
+      const startIndex = contextEndIndex > 0 ? contextEndIndex : Math.min(50, Math.max(0, candles.length - 1));
+      set({
+        symbol, date, candles,
+        contextCandles: [],
+        contextInterval: "",
+        tradingCandlesStored: [],
+        tradingStartOffset: 0,
+        currentIndex: startIndex, isPlaying: false, speed: 1,
+        cash: balance, startingCash: balance, position: null,
+        trades: [], closedTrades: [], realizedPnl: 0, isLockedOut: false,
+        isPendingExecution: false, regimes: [],
+        currentPrice: candles.length > 0 ? candles[startIndex]?.close ?? candles[0].close : 0, pnl: 0,
+        contextEndIndex: startIndex,
+        isStudyPhase: contextEndIndex > 0,
+        yahooInsights: null,
+      });
+    }
   },
 
   goLive: () => {
@@ -554,10 +589,28 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
     const maxRiskDollars = (riskSettings.maxRiskPercent / 100) * startingCash;
     return Math.min(Math.floor(maxRiskDollars / (realPrice - stopPrice)), Math.floor(cash / realPrice));
   },
-  setScarcityMode: (enabled) => set({ scarcityMode: enabled }),
   setMicroNoise: (enabled, ticksPerCandle?) => set({ microNoiseEnabled: enabled, microTicksPerCandle: ticksPerCandle ?? get().microTicksPerCandle, microTickCount: 0, microPath: [] }),
   submitPreSession: (reflection) => {
-    set({ preSessionReflection: reflection, showPreSession: false, isStudyPhase: false });
+    const { tradingCandlesStored, tradingStartOffset } = get();
+    if (tradingCandlesStored.length > 0) {
+      // Dual-TF: swap chart to trading-interval candles
+      // Lookback candles [0..offset) are already visible; live trading starts at offset
+      const startIdx = tradingStartOffset;
+      set({
+        candles: tradingCandlesStored,
+        currentIndex: startIdx,
+        currentPrice: tradingCandlesStored[startIdx]?.close ?? tradingCandlesStored[0].close,
+        contextEndIndex: 0,
+        isStudyPhase: false,
+        showPreSession: false,
+        preSessionReflection: reflection,
+        tradingCandlesStored: [],
+        contextCandles: [],
+      });
+    } else {
+      // Single-TF: just lift study phase restriction
+      set({ preSessionReflection: reflection, showPreSession: false, isStudyPhase: false });
+    }
   },
   submitPostSession: (reflection) => {
     set({ postSessionReflection: reflection, showPostSession: false });
@@ -565,16 +618,15 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
   dismissPostSession: () => {
     set({ showPostSession: false });
   },
+  setYahooInsights: (insights) => set({ yahooInsights: insights }),
   getSessionScore: () => { const { trades, closedTrades, currentIndex } = get(); return calculateSessionScore(trades, closedTrades, currentIndex); },
-  getCurrentRegime: () => { const { regimes, currentIndex } = get(); if (regimes.length === 0) return "choppy"; return regimes.reduce((c, r) => r.startIndex <= currentIndex ? r : c, regimes[0]).regime; },
-  getActiveEvent: () => { const { events, currentIndex } = get(); return events.find((e) => e.candleIndex <= currentIndex && currentIndex - e.candleIndex < 5) ?? null; },
-  reset: () => set({ symbol: "", date: "", candles: [], currentIndex: 0, isPlaying: false, speed: 1, cash: STARTING_CASH, startingCash: STARTING_CASH, position: null, trades: [], closedTrades: [], realizedPnl: 0, isLockedOut: false, isPendingExecution: false, events: [], regimes: [], correlatedSymbols: [], scarcityMode: false, currentPrice: 0, pnl: 0, contextEndIndex: 0, isStudyPhase: false, microTickCount: 0, microPath: [], showPreSession: false, showPostSession: false, preSessionReflection: null, postSessionReflection: null, sessionEnded: false }),
+  getCurrentRegime: () => { const { regimes, currentIndex, yahooInsights } = get(); if (regimes.length === 0) return yahooInsights?.regime ?? "choppy"; return regimes.reduce((c, r) => r.startIndex <= currentIndex ? r : c, regimes[0]).regime; },
+  reset: () => set({ symbol: "", date: "", candles: [], currentIndex: 0, isPlaying: false, speed: 1, cash: STARTING_CASH, startingCash: STARTING_CASH, position: null, trades: [], closedTrades: [], realizedPnl: 0, isLockedOut: false, isPendingExecution: false, regimes: [], currentPrice: 0, pnl: 0, contextEndIndex: 0, isStudyPhase: false, contextCandles: [], contextInterval: "", tradingCandlesStored: [], tradingStartOffset: 0, microTickCount: 0, microPath: [], showPreSession: false, showPostSession: false, preSessionReflection: null, postSessionReflection: null, sessionEnded: false, yahooInsights: null }),
 }), {
   name: "stock-sim-settings",
   partialize: (state) => ({
     riskSettings: state.riskSettings,
     microNoiseEnabled: state.microNoiseEnabled,
     microTicksPerCandle: state.microTicksPerCandle,
-    scarcityMode: state.scarcityMode,
   }),
 }));
