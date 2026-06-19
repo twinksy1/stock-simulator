@@ -17,6 +17,7 @@ import OrderFlowPanel from "@/components/OrderFlowPanel";
 import PreSessionModal from "@/components/PreSessionModal";
 import PostSessionModal from "@/components/PostSessionModal";
 import PerformanceTracker from "@/components/PerformanceTracker";
+import SessionExport from "@/components/SessionExport";
 import type { PostSessionReflection } from "@/types/market";
 
 export default function Home() {
@@ -142,6 +143,7 @@ export default function Home() {
               >
                 New Session
               </button>
+              <SessionExport />
             </div>
 
             {/* Market context (regime + events + sector correlation) */}

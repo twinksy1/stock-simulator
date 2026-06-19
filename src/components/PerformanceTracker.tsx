@@ -16,6 +16,12 @@ export default function PerformanceTracker() {
   const profitFactor = useMemo(() => getProfitFactor(), [getProfitFactor, sessions]);
   const expectancy = useMemo(() => getExpectancy(), [getExpectancy, sessions, totalWins, totalLosses]);
 
+  // R equity curve — simple sparkline
+  const equityCurve = useMemo(() => {
+    let cum = 0;
+    return sessions.map((s) => { cum += s.totalR; return cum; });
+  }, [sessions]);
+
   if (totalSessions === 0) {
     return (
       <div className="bg-slate-800 rounded-lg p-4 border border-slate-700">
@@ -32,12 +38,6 @@ export default function PerformanceTracker() {
     : "—";
 
   const streakColor = currentStreak > 0 ? "text-green-400" : currentStreak < 0 ? "text-red-400" : "text-slate-400";
-
-  // R equity curve — simple sparkline
-  const equityCurve = useMemo(() => {
-    let cum = 0;
-    return sessions.map((s) => { cum += s.totalR; return cum; });
-  }, [sessions]);
 
   const minEquity = Math.min(0, ...equityCurve);
   const maxEquity = Math.max(0.01, ...equityCurve);
