@@ -16,6 +16,7 @@ interface IndicatorSettings {
   showMACD: boolean;
   showBollingerBands: boolean;
   showVWAP: boolean;
+  showDropPercent: boolean;
   movingAverages: MovingAverageConfig[];
 
   toggleVolume: () => void;
@@ -23,6 +24,7 @@ interface IndicatorSettings {
   toggleMACD: () => void;
   toggleBollingerBands: () => void;
   toggleVWAP: () => void;
+  toggleDropPercent: () => void;
   toggleMA: (id: string) => void;
   addMA: (period: number, color: string, type: MAType) => void;
   removeMA: (id: string) => void;
@@ -44,6 +46,7 @@ export const useIndicatorStore = create<IndicatorSettings>((set) => ({
   showMACD: true,
   showBollingerBands: false,
   showVWAP: false,
+  showDropPercent: false,
   movingAverages: DEFAULT_MAS,
 
   toggleVolume: () => set((s) => ({ showVolume: !s.showVolume })),
@@ -51,6 +54,7 @@ export const useIndicatorStore = create<IndicatorSettings>((set) => ({
   toggleMACD: () => set((s) => ({ showMACD: !s.showMACD })),
   toggleBollingerBands: () => set((s) => ({ showBollingerBands: !s.showBollingerBands })),
   toggleVWAP: () => set((s) => ({ showVWAP: !s.showVWAP })),
+  toggleDropPercent: () => set((s) => ({ showDropPercent: !s.showDropPercent })),
 
   toggleMA: (id) =>
     set((s) => ({

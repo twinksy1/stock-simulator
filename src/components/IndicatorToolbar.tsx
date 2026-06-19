@@ -18,12 +18,14 @@ export default function IndicatorToolbar() {
     showMACD,
     showBollingerBands,
     showVWAP,
+    showDropPercent,
     movingAverages,
     toggleVolume,
     toggleRSI,
     toggleMACD,
     toggleBollingerBands,
     toggleVWAP,
+    toggleDropPercent,
     toggleMA,
     addMA,
     removeMA,
@@ -65,6 +67,9 @@ export default function IndicatorToolbar() {
 
         {/* VWAP toggle */}
         <TogglePill label="VWAP" active={showVWAP} onClick={toggleVWAP} color="#fbbf24" />
+
+        {/* Drop % toggle */}
+        <TogglePill label="Drop %" active={showDropPercent} onClick={toggleDropPercent} color="#f87171" />
 
         {/* Separator */}
         <span className="w-px h-5 bg-slate-600 mx-1" />

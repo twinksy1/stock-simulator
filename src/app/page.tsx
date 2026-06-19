@@ -1,6 +1,8 @@
 "use client";
 
+import { useCallback } from "react";
 import { useSimulationStore } from "@/store/simulation";
+import { usePerformanceStore } from "@/store/performance";
 import ChartWithIndicators from "@/components/ChartWithIndicators";
 import ControlPanel from "@/components/ControlPanel";
 import OrderPanel from "@/components/OrderPanel";
@@ -14,6 +16,8 @@ import SetupStats from "@/components/SetupStats";
 import OrderFlowPanel from "@/components/OrderFlowPanel";
 import PreSessionModal from "@/components/PreSessionModal";
 import PostSessionModal from "@/components/PostSessionModal";
+import PerformanceTracker from "@/components/PerformanceTracker";
+import type { PostSessionReflection } from "@/types/market";
 
 export default function Home() {
   const symbol = useSimulationStore((s) => s.symbol);
@@ -27,9 +31,54 @@ export default function Home() {
   const showPreSession = useSimulationStore((s) => s.showPreSession);
   const showPostSession = useSimulationStore((s) => s.showPostSession);
   const submitPreSession = useSimulationStore((s) => s.submitPreSession);
-  const submitPostSession = useSimulationStore((s) => s.submitPostSession);
-  const dismissPostSession = useSimulationStore((s) => s.dismissPostSession);
   const trades = useSimulationStore((s) => s.trades);
+
+  // Record session performance before clearing state
+  const recordCurrentSession = useCallback(() => {
+    const sim = useSimulationStore.getState();
+    const perf = usePerformanceStore.getState();
+    if (sim.closedTrades.length === 0) return;
+
+    const closedTrades = sim.closedTrades;
+    const wins = closedTrades.filter((t) => t.realizedPnl > 0).length;
+    const losses = closedTrades.filter((t) => t.realizedPnl <= 0).length;
+    const rValues = closedTrades.map((t) => t.rMultiple).filter((r): r is number => r !== null);
+    const totalR = rValues.reduce((sum, r) => sum + r, 0);
+    const bestR = rValues.length > 0 ? Math.max(...rValues) : null;
+    const worstR = rValues.length > 0 ? Math.min(...rValues) : null;
+    const score = sim.getSessionScore();
+
+    perf.recordSession({
+      symbol: sim.symbol,
+      interval: sim.date,
+      difficulty: "", // Not stored in sim state, but could be added later
+      startBalance: sim.startingCash,
+      endBalance: sim.cash + (sim.position ? sim.position.quantity * sim.currentPrice : 0),
+      realizedPnl: sim.realizedPnl,
+      totalTrades: closedTrades.length,
+      wins,
+      losses,
+      totalR,
+      bestR,
+      worstR,
+      grade: score.overallGrade,
+    });
+  }, []);
+
+  const handlePostSubmit = useCallback((reflection: PostSessionReflection) => {
+    recordCurrentSession();
+    useSimulationStore.getState().submitPostSession(reflection);
+  }, [recordCurrentSession]);
+
+  const handlePostDismiss = useCallback(() => {
+    recordCurrentSession();
+    useSimulationStore.getState().dismissPostSession();
+  }, [recordCurrentSession]);
+
+  const handleReset = useCallback(() => {
+    recordCurrentSession();
+    useSimulationStore.getState().reset();
+  }, [recordCurrentSession]);
 
   return (
     <main className="min-h-screen bg-slate-900 text-white p-6">
@@ -44,7 +93,10 @@ export default function Home() {
 
       <div className="max-w-7xl mx-auto">
         {!isSessionActive ? (
-          <SessionSetup />
+          <div className="space-y-6">
+            <SessionSetup />
+            <PerformanceTracker />
+          </div>
         ) : (
           <div className="space-y-4">
             {/* Study Phase Banner */}
@@ -85,7 +137,7 @@ export default function Home() {
                 </span>
               )}
               <button
-                onClick={() => useSimulationStore.getState().reset()}
+                onClick={handleReset}
                 className="ml-auto text-slate-400 hover:text-white text-sm underline"
               >
                 New Session
@@ -113,6 +165,7 @@ export default function Home() {
                 <OrderPanel />
                 <OrderFlowPanel />
                 <SessionScoreCard />
+                <PerformanceTracker />
                 <RiskSettingsPanel />
               </div>
             </div>
@@ -129,8 +182,8 @@ export default function Home() {
       {showPostSession && (
         <PostSessionModal
           trades={trades}
-          onSubmit={submitPostSession}
-          onDismiss={dismissPostSession}
+          onSubmit={handlePostSubmit}
+          onDismiss={handlePostDismiss}
         />
       )}
     </main>

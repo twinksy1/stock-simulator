@@ -6,11 +6,76 @@ import {
   CandlestickSeries,
   LineSeries,
   HistogramSeries,
+  createSeriesMarkers,
 } from "lightweight-charts";
-import type { IChartApi, ISeriesApi, Time } from "lightweight-charts";
+import type { IChartApi, ISeriesApi, Time, SeriesMarker, ISeriesMarkersPluginApi } from "lightweight-charts";
 import { useSimulationStore } from "@/store/simulation";
 import { useIndicatorStore } from "@/store/indicators";
 import { computeIndicators } from "@/lib/indicators";
+import type { Candle } from "@/types/market";
+
+/** Detect completed bearish legs in visible candles.
+ *  A "drop" = swing high → swing low where at least 2 candles moved down.
+ *  Returns array of { index, pctDrop } for completed drops only. */
+function detectDrops(candles: Candle[], upToIndex: number): { index: number; pctDrop: number }[] {
+  const drops: { index: number; pctDrop: number }[] = [];
+  if (upToIndex < 2) return drops;
+
+  let legHigh = candles[0].high;
+  let legLow = candles[0].low;
+  let legHighIdx = 0;
+  let inDrop = false;
+  let legCandles = 0;
+
+  for (let i = 1; i <= upToIndex; i++) {
+    const c = candles[i];
+    if (!c) break;
+
+    if (c.close < candles[i - 1].close) {
+      // Bearish candle — extend or start a drop
+      if (!inDrop) {
+        // Start new potential drop from the highest high in recent upswing
+        legHigh = candles[i - 1].high;
+        legHighIdx = i - 1;
+        // Check if any of the last few candles had a higher high
+        for (let j = Math.max(0, i - 3); j < i; j++) {
+          if (candles[j].high > legHigh) {
+            legHigh = candles[j].high;
+            legHighIdx = j;
+          }
+        }
+        legLow = c.low;
+        inDrop = true;
+        legCandles = 1;
+      } else {
+        legLow = Math.min(legLow, c.low);
+        legCandles++;
+      }
+    } else if (inDrop) {
+      // Reversal — drop is complete
+      if (legCandles >= 2 && legHigh > 0) {
+        const pctDrop = ((legHigh - legLow) / legHigh) * 100;
+        if (pctDrop >= 0.1) {
+          drops.push({ index: i - 1, pctDrop });
+        }
+      }
+      // Reset — start tracking potential new high
+      legHigh = c.high;
+      legHighIdx = i;
+      legLow = c.low;
+      inDrop = false;
+      legCandles = 0;
+    } else {
+      // Continuing up — track the high
+      if (c.high > legHigh) {
+        legHigh = c.high;
+        legHighIdx = i;
+      }
+    }
+  }
+  // Don't record in-progress drops — only completed ones
+  return drops;
+}
 
 export default function ChartWithIndicators() {
   const chartContainerRef = useRef<HTMLDivElement>(null);
@@ -32,6 +97,7 @@ export default function ChartWithIndicators() {
   const bbMiddleRef = useRef<ISeriesApi<"Line"> | null>(null);
   const bbLowerRef = useRef<ISeriesApi<"Line"> | null>(null);
   const vwapSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
+  const dropMarkersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
 
   const candles = useSimulationStore((s) => s.candles);
   const currentIndex = useSimulationStore((s) => s.currentIndex);
@@ -39,7 +105,7 @@ export default function ChartWithIndicators() {
   const microNoiseEnabled = useSimulationStore((s) => s.microNoiseEnabled);
   const microTickCount = useSimulationStore((s) => s.microTickCount);
 
-  const { showVolume, showRSI, showMACD, showBollingerBands, showVWAP, movingAverages } = useIndicatorStore();
+  const { showVolume, showRSI, showMACD, showBollingerBands, showVWAP, showDropPercent, movingAverages } = useIndicatorStore();
   const enabledMAs = useMemo(
     () => movingAverages.filter((ma) => ma.enabled),
     [movingAverages]
@@ -89,6 +155,10 @@ export default function ChartWithIndicators() {
       wickUpColor: "#22c55e",
       wickDownColor: "#ef4444",
     });
+
+    // Drop % markers plugin
+    const dropMarkers = createSeriesMarkers(candleSeries);
+    dropMarkersRef.current = dropMarkers;
 
     const volumeSeries = mainChart.addSeries(HistogramSeries, {
       priceFormat: { type: "volume" },
@@ -347,7 +417,35 @@ export default function ChartWithIndicators() {
       signalLineRef.current?.setData([]);
       macdHistRef.current?.setData([]);
     }
-  }, [candles, currentIndex, indicators, showVolume, showRSI, showMACD, showBollingerBands, showVWAP, enabledMAs]);
+    
+    // Drop % markers
+    if (showDropPercent && dropMarkersRef.current) {
+      const drops = detectDrops(candles, currentIndex);
+      const markers: SeriesMarker<Time>[] = drops.map((d) => {
+        const pct = d.pctDrop;
+        let color: string;
+        let shape: "arrowDown" | "circle" = "arrowDown";
+        if (pct >= 1.0) {
+          color = "#ef4444"; // red — real sweep / trend leg
+        } else if (pct >= 0.5) {
+          color = "#eab308"; // yellow — medium drop
+        } else {
+          color = "#6b7280"; // gray — noise
+          shape = "circle";
+        }
+        return {
+          time: candles[d.index].time as Time,
+          position: "belowBar" as const,
+          color,
+          shape,
+          text: `−${pct.toFixed(2)}%`,
+        };
+      });
+      dropMarkersRef.current.setMarkers(markers);
+    } else if (dropMarkersRef.current) {
+      dropMarkersRef.current.setMarkers([]);
+    }
+  }, [candles, currentIndex, indicators, showVolume, showRSI, showMACD, showBollingerBands, showVWAP, showDropPercent, enabledMAs]);
 
   // Micro-tick: efficiently update just the last candle bar's close/high/low
   useEffect(() => {
