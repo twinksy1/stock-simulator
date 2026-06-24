@@ -102,8 +102,6 @@ export default function ChartWithIndicators() {
   const candles = useSimulationStore((s) => s.candles);
   const currentIndex = useSimulationStore((s) => s.currentIndex);
   const currentPrice = useSimulationStore((s) => s.currentPrice);
-  const microNoiseEnabled = useSimulationStore((s) => s.microNoiseEnabled);
-  const microTickCount = useSimulationStore((s) => s.microTickCount);
 
   const { showVolume, showRSI, showMACD, showBollingerBands, showVWAP, showDropPercent, movingAverages } = useIndicatorStore();
   const enabledMAs = useMemo(
@@ -303,168 +301,185 @@ export default function ChartWithIndicators() {
     }
   }, [enabledMAs]);
 
-  // Update all chart data on tick
+  // Track what was last rendered to enable incremental updates
+  const lastRenderedIndexRef = useRef<number>(-1);
+  const lastIndicatorTogglesRef = useRef<string>("");
+
+  // Build a toggle key to detect when indicators change (requires full redraw)
+  const toggleKey = `${showVolume}-${showRSI}-${showMACD}-${showBollingerBands}-${showVWAP}-${showDropPercent}-${enabledMAs.map(m => m.id).join(",")}`;
+
+  // Update chart data — incremental when just ticking forward, full redraw on jumps/toggles
   useEffect(() => {
     if (!candleSeriesRef.current || candles.length === 0 || !indicators) return;
 
     const slice = currentIndex + 1;
+    const prevIndex = lastRenderedIndexRef.current;
+    const togglesChanged = toggleKey !== lastIndicatorTogglesRef.current;
+    const isIncremental = !togglesChanged && currentIndex === prevIndex + 1 && prevIndex >= 0;
 
-    // Candles (always shown)
-    candleSeriesRef.current.setData(
-      candles.slice(0, slice).map((c) => ({
-        time: c.time as Time,
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close,
-      }))
-    );
+    if (isIncremental) {
+      // FAST PATH: Only append the new data point to each series
+      const c = candles[currentIndex];
+      const t = c.time as Time;
 
-    // Volume
-    if (showVolume) {
-      volumeSeriesRef.current?.setData(
+      candleSeriesRef.current.update({ time: t, open: c.open, high: c.high, low: c.low, close: c.close });
+
+      if (showVolume) {
+        volumeSeriesRef.current?.update({ time: t, value: c.volume, color: c.close >= c.open ? "#22c55e40" : "#ef444440" });
+      }
+
+      for (const ma of enabledMAs) {
+        const series = maSeriesMapRef.current.get(ma.id);
+        const maLine = indicators.maLines.find((s) => s.id === ma.id);
+        if (series && maLine) {
+          const val = maLine.values[currentIndex];
+          if (val !== null) series.update({ time: t, value: val });
+        }
+      }
+
+      if (showVWAP) {
+        const val = indicators.vwap[currentIndex];
+        if (val !== null) vwapSeriesRef.current?.update({ time: t, value: val });
+      }
+
+      if (showBollingerBands && indicators.bollingerBands) {
+        const bb = indicators.bollingerBands;
+        if (bb.upper[currentIndex] !== null) bbUpperRef.current?.update({ time: t, value: bb.upper[currentIndex]! });
+        if (bb.middle[currentIndex] !== null) bbMiddleRef.current?.update({ time: t, value: bb.middle[currentIndex]! });
+        if (bb.lower[currentIndex] !== null) bbLowerRef.current?.update({ time: t, value: bb.lower[currentIndex]! });
+      }
+
+      if (showRSI) {
+        const val = indicators.rsi[currentIndex];
+        if (val !== null) rsiSeriesRef.current?.update({ time: t, value: val });
+      }
+
+      if (showMACD) {
+        const m = indicators.macd[currentIndex];
+        if (m.macd !== null) macdLineRef.current?.update({ time: t, value: m.macd });
+        if (m.signal !== null) signalLineRef.current?.update({ time: t, value: m.signal });
+        if (m.histogram !== null) macdHistRef.current?.update({ time: t, value: m.histogram, color: m.histogram >= 0 ? "#22c55e80" : "#ef444480" });
+      }
+
+      // Drop markers: only recompute if last candle was bearish (potential new drop completed)
+      if (showDropPercent && dropMarkersRef.current) {
+        const prev = candles[currentIndex - 1];
+        if (c.close >= prev.close) {
+          // Reversal candle — a drop may have just completed
+          const drops = detectDrops(candles, currentIndex);
+          const markers: SeriesMarker<Time>[] = drops.map((d) => {
+            const pct = d.pctDrop;
+            let color: string;
+            let shape: "arrowDown" | "circle" = "arrowDown";
+            if (pct >= 1.0) color = "#ef4444";
+            else if (pct >= 0.5) { color = "#eab308"; }
+            else { color = "#6b7280"; shape = "circle"; }
+            return { time: candles[d.index].time as Time, position: "belowBar" as const, color, shape, text: `−${pct.toFixed(2)}%` };
+          });
+          dropMarkersRef.current.setMarkers(markers);
+        }
+      }
+
+    } else {
+      // FULL REDRAW: initial load, jump, or indicator toggle change
+      candleSeriesRef.current.setData(
         candles.slice(0, slice).map((c) => ({
-          time: c.time as Time,
-          value: c.volume,
-          color: c.close >= c.open ? "#22c55e40" : "#ef444440",
+          time: c.time as Time, open: c.open, high: c.high, low: c.low, close: c.close,
         }))
       );
-    } else {
-      volumeSeriesRef.current?.setData([]);
-    }
 
-    // Moving averages
-    for (const ma of enabledMAs) {
-      const series = maSeriesMapRef.current.get(ma.id);
-      const maLine = indicators.maLines.find((s) => s.id === ma.id);
-      if (series && maLine) {
-        series.setData(
-          maLine.values.slice(0, slice).reduce<{ time: Time; value: number }[]>(
-            (acc, val, i) => {
-              if (val !== null) acc.push({ time: candles[i].time as Time, value: val });
-              return acc;
-            },
-            []
-          )
+      if (showVolume) {
+        volumeSeriesRef.current?.setData(
+          candles.slice(0, slice).map((c) => ({
+            time: c.time as Time, value: c.volume, color: c.close >= c.open ? "#22c55e40" : "#ef444440",
+          }))
         );
-      }
-    }
-
-    // VWAP
-    if (showVWAP) {
-      vwapSeriesRef.current?.setData(
-        indicators.vwap.slice(0, slice).reduce<{ time: Time; value: number }[]>((acc, val, i) => {
-          if (val !== null) acc.push({ time: candles[i].time as Time, value: val });
-          return acc;
-        }, [])
-      );
-    } else {
-      vwapSeriesRef.current?.setData([]);
-    }
-
-    // Bollinger Bands
-    if (showBollingerBands && indicators.bollingerBands) {
-      const toLineData = (arr: (number | null)[]) =>
-        arr.slice(0, slice).reduce<{ time: Time; value: number }[]>((acc, val, i) => {
-          if (val !== null) acc.push({ time: candles[i].time as Time, value: val });
-          return acc;
-        }, []);
-      bbUpperRef.current?.setData(toLineData(indicators.bollingerBands.upper));
-      bbMiddleRef.current?.setData(toLineData(indicators.bollingerBands.middle));
-      bbLowerRef.current?.setData(toLineData(indicators.bollingerBands.lower));
-    } else {
-      bbUpperRef.current?.setData([]);
-      bbMiddleRef.current?.setData([]);
-      bbLowerRef.current?.setData([]);
-    }
-
-    // RSI
-    if (showRSI) {
-      rsiSeriesRef.current?.setData(
-        indicators.rsi.slice(0, slice).reduce<{ time: Time; value: number }[]>((acc, val, i) => {
-          if (val !== null) acc.push({ time: candles[i].time as Time, value: val });
-          return acc;
-        }, [])
-      );
-    } else {
-      rsiSeriesRef.current?.setData([]);
-    }
-
-    // MACD
-    if (showMACD) {
-      const macdData: { time: Time; value: number }[] = [];
-      const signalData: { time: Time; value: number }[] = [];
-      const histData: { time: Time; value: number; color: string }[] = [];
-
-      for (let i = 0; i < slice; i++) {
-        const m = indicators.macd[i];
-        if (m.macd !== null) macdData.push({ time: candles[i].time as Time, value: m.macd });
-        if (m.signal !== null)
-          signalData.push({ time: candles[i].time as Time, value: m.signal });
-        if (m.histogram !== null)
-          histData.push({
-            time: candles[i].time as Time,
-            value: m.histogram,
-            color: m.histogram >= 0 ? "#22c55e80" : "#ef444480",
-          });
+      } else {
+        volumeSeriesRef.current?.setData([]);
       }
 
-      macdLineRef.current?.setData(macdData);
-      signalLineRef.current?.setData(signalData);
-      macdHistRef.current?.setData(histData);
-    } else {
-      macdLineRef.current?.setData([]);
-      signalLineRef.current?.setData([]);
-      macdHistRef.current?.setData([]);
-    }
-    
-    // Drop % markers
-    if (showDropPercent && dropMarkersRef.current) {
-      const drops = detectDrops(candles, currentIndex);
-      const markers: SeriesMarker<Time>[] = drops.map((d) => {
-        const pct = d.pctDrop;
-        let color: string;
-        let shape: "arrowDown" | "circle" = "arrowDown";
-        if (pct >= 1.0) {
-          color = "#ef4444"; // red — real sweep / trend leg
-        } else if (pct >= 0.5) {
-          color = "#eab308"; // yellow — medium drop
-        } else {
-          color = "#6b7280"; // gray — noise
-          shape = "circle";
+      for (const ma of enabledMAs) {
+        const series = maSeriesMapRef.current.get(ma.id);
+        const maLine = indicators.maLines.find((s) => s.id === ma.id);
+        if (series && maLine) {
+          series.setData(
+            maLine.values.slice(0, slice).reduce<{ time: Time; value: number }[]>(
+              (acc, val, i) => { if (val !== null) acc.push({ time: candles[i].time as Time, value: val }); return acc; }, []
+            )
+          );
         }
-        return {
-          time: candles[d.index].time as Time,
-          position: "belowBar" as const,
-          color,
-          shape,
-          text: `−${pct.toFixed(2)}%`,
-        };
-      });
-      dropMarkersRef.current.setMarkers(markers);
-    } else if (dropMarkersRef.current) {
-      dropMarkersRef.current.setMarkers([]);
+      }
+
+      if (showVWAP) {
+        vwapSeriesRef.current?.setData(
+          indicators.vwap.slice(0, slice).reduce<{ time: Time; value: number }[]>((acc, val, i) => {
+            if (val !== null) acc.push({ time: candles[i].time as Time, value: val }); return acc;
+          }, [])
+        );
+      } else { vwapSeriesRef.current?.setData([]); }
+
+      if (showBollingerBands && indicators.bollingerBands) {
+        const toLineData = (arr: (number | null)[]) =>
+          arr.slice(0, slice).reduce<{ time: Time; value: number }[]>((acc, val, i) => {
+            if (val !== null) acc.push({ time: candles[i].time as Time, value: val }); return acc;
+          }, []);
+        bbUpperRef.current?.setData(toLineData(indicators.bollingerBands.upper));
+        bbMiddleRef.current?.setData(toLineData(indicators.bollingerBands.middle));
+        bbLowerRef.current?.setData(toLineData(indicators.bollingerBands.lower));
+      } else {
+        bbUpperRef.current?.setData([]);
+        bbMiddleRef.current?.setData([]);
+        bbLowerRef.current?.setData([]);
+      }
+
+      if (showRSI) {
+        rsiSeriesRef.current?.setData(
+          indicators.rsi.slice(0, slice).reduce<{ time: Time; value: number }[]>((acc, val, i) => {
+            if (val !== null) acc.push({ time: candles[i].time as Time, value: val }); return acc;
+          }, [])
+        );
+      } else { rsiSeriesRef.current?.setData([]); }
+
+      if (showMACD) {
+        const macdData: { time: Time; value: number }[] = [];
+        const signalData: { time: Time; value: number }[] = [];
+        const histData: { time: Time; value: number; color: string }[] = [];
+        for (let i = 0; i < slice; i++) {
+          const m = indicators.macd[i];
+          if (m.macd !== null) macdData.push({ time: candles[i].time as Time, value: m.macd });
+          if (m.signal !== null) signalData.push({ time: candles[i].time as Time, value: m.signal });
+          if (m.histogram !== null) histData.push({ time: candles[i].time as Time, value: m.histogram, color: m.histogram >= 0 ? "#22c55e80" : "#ef444480" });
+        }
+        macdLineRef.current?.setData(macdData);
+        signalLineRef.current?.setData(signalData);
+        macdHistRef.current?.setData(histData);
+      } else {
+        macdLineRef.current?.setData([]);
+        signalLineRef.current?.setData([]);
+        macdHistRef.current?.setData([]);
+      }
+
+      // Drop markers (full recalculate)
+      if (showDropPercent && dropMarkersRef.current) {
+        const drops = detectDrops(candles, currentIndex);
+        const markers: SeriesMarker<Time>[] = drops.map((d) => {
+          const pct = d.pctDrop;
+          let color: string;
+          let shape: "arrowDown" | "circle" = "arrowDown";
+          if (pct >= 1.0) color = "#ef4444";
+          else if (pct >= 0.5) { color = "#eab308"; }
+          else { color = "#6b7280"; shape = "circle"; }
+          return { time: candles[d.index].time as Time, position: "belowBar" as const, color, shape, text: `−${pct.toFixed(2)}%` };
+        });
+        dropMarkersRef.current.setMarkers(markers);
+      } else if (dropMarkersRef.current) {
+        dropMarkersRef.current.setMarkers([]);
+      }
     }
-  }, [candles, currentIndex, indicators, showVolume, showRSI, showMACD, showBollingerBands, showVWAP, showDropPercent, enabledMAs]);
 
-  // Micro-tick: efficiently update just the last candle bar's close/high/low
-  useEffect(() => {
-    if (!microNoiseEnabled || !candleSeriesRef.current || candles.length === 0) return;
-    if (microTickCount === 0) return; // skip when candle just finalized
-
-    const candle = candles[currentIndex];
-    if (!candle) return;
-
-    // Update the last bar with current micro-tick price as the "close"
-    // Expand high/low if the micro-price exceeds them
-    candleSeriesRef.current.update({
-      time: candle.time as Time,
-      open: candle.open,
-      high: Math.max(candle.high, currentPrice),
-      low: Math.min(candle.low, currentPrice),
-      close: currentPrice,
-    });
-  }, [microNoiseEnabled, microTickCount, currentPrice, candles, currentIndex]);
+    lastRenderedIndexRef.current = currentIndex;
+    lastIndicatorTogglesRef.current = toggleKey;
+  }, [candles, currentIndex, indicators, showVolume, showRSI, showMACD, showBollingerBands, showVWAP, showDropPercent, enabledMAs, toggleKey]);
 
   // Current candle info bar
   const currentCandle = candles[currentIndex] ?? null;
@@ -491,7 +506,7 @@ export default function ChartWithIndicators() {
                 currentPrice >= currentCandle.open ? "text-green-400" : "text-red-400"
               }
             >
-              {microNoiseEnabled && microTickCount > 0 ? currentPrice.toFixed(2) : currentCandle.close.toFixed(2)}
+              {currentPrice.toFixed(2)}
             </span>
           </span>
           <span className="text-slate-400">

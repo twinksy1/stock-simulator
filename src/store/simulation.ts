@@ -55,6 +55,9 @@ interface SimulationState {
   postSessionReflection: PostSessionReflection | null;
   sessionEnded: boolean;
 
+  // Order feedback
+  lastOrderError: string | null;
+
   // Yahoo insights for real data sessions
   yahooInsights: YahooInsights | null;
 
@@ -117,6 +120,9 @@ function calculatePnl(state: {
 function checkAutoStopLoss(get: () => SimulationState, set: (partial: Partial<SimulationState>) => void) {
   const s = get();
   if (!s.position || !s.position.plannedStop || s.isStudyPhase || s.isPendingExecution) return;
+
+  // Don't execute stops outside market hours
+  if (!isMarketHours(s.candles, s.currentIndex)) return;
 
   // Use the finalized candle close price, not micro-tick noise
   const candle = s.candles[s.currentIndex];
@@ -342,6 +348,7 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
   preSessionReflection: null,
   postSessionReflection: null,
   sessionEnded: false,
+  lastOrderError: null,
   yahooInsights: null,
 
   loadSession: (symbol, date, candles, contextEndIndex = 0, startBalance, contextCandles, contextInterval, tradingStartOffset = 0) => {
@@ -464,14 +471,15 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
 
   buy: (quantity, plannedStop?, journal?) => {
     const { cash, isLockedOut, riskSettings, closedTrades, currentIndex, isStudyPhase, candles } = get();
-    if (isStudyPhase) return false;
-    if (isLockedOut) return false;
-    if (!isMarketHours(candles, currentIndex)) return false;
+    if (isStudyPhase) { set({ lastOrderError: "Cannot trade during study phase" }); return false; }
+    if (isLockedOut) { set({ lastOrderError: "Locked out — daily loss limit reached" }); return false; }
+    if (!isMarketHours(candles, currentIndex)) { set({ lastOrderError: "Market closed — wait for 9:30 AM ET" }); return false; }
 
     // Cooldown check: prevent re-entry too soon after last sell
     if (riskSettings.cooldownCandles > 0 && closedTrades.length > 0) {
       const lastClosed = closedTrades[closedTrades.length - 1];
-      if (currentIndex - lastClosed.exitCandleIndex < riskSettings.cooldownCandles) return false;
+      const remaining = riskSettings.cooldownCandles - (currentIndex - lastClosed.exitCandleIndex);
+      if (remaining > 0) { set({ lastOrderError: `Cooldown: wait ${remaining} more candle${remaining !== 1 ? "s" : ""}` }); return false; }
     }
 
     // Use actual candle close price for execution (not micro-tick noise)
@@ -480,17 +488,22 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
     const spreadMultiplier = 1 + (riskSettings.spreadBps / 10000);
     const askPrice = realPrice * spreadMultiplier;
     const totalCost = askPrice * quantity + riskSettings.commissionPerTrade;
-    if (totalCost > cash) return false;
+    if (totalCost > cash) { set({ lastOrderError: `Insufficient funds: need $${totalCost.toFixed(2)}, have $${cash.toFixed(2)}` }); return false; }
 
-    set({ isPendingExecution: riskSettings.executionDelayMs > 0 });
+    set({ isPendingExecution: riskSettings.executionDelayMs > 0, lastOrderError: null });
 
     const executeTrade = () => {
       const s = get();
+      // Re-check market hours at execution time (candle may have advanced during delay)
+      if (!isMarketHours(s.candles, s.currentIndex)) {
+        set({ isPendingExecution: false, lastOrderError: "Order cancelled — market closed during execution delay" });
+        return;
+      }
       // Always use real candle close price, not micro-tick interpolated price
       const realExecPrice = s.candles[s.currentIndex]?.close ?? 0;
       const execPrice = realExecPrice * spreadMultiplier;
       const execCost = execPrice * quantity + s.riskSettings.commissionPerTrade;
-      if (execCost > s.cash) { set({ isPendingExecution: false }); return; }
+      if (execCost > s.cash) { set({ isPendingExecution: false, lastOrderError: "Order cancelled — price moved, insufficient funds" }); return; }
 
       const mistakes = detectMistakes(s.trades, s.closedTrades, s.currentIndex, "buy", s.candles);
       const newPosition: Position = s.position
@@ -519,18 +532,22 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
 
   sell: (quantity, journal?) => {
     const { position, riskSettings, trades, currentIndex, isStudyPhase, candles } = get();
-    if (isStudyPhase) return false;
-    if (!isMarketHours(candles, currentIndex)) return false;
-    if (!position || position.quantity < quantity) return false;
+    if (isStudyPhase) { set({ lastOrderError: "Cannot trade during study phase" }); return false; }
+    if (!isMarketHours(candles, currentIndex)) { set({ lastOrderError: "Market closed — wait for 9:30 AM ET" }); return false; }
+    if (!position || position.quantity < quantity) { set({ lastOrderError: "No position to sell" }); return false; }
 
     // Minimum hold time check
     if (riskSettings.minHoldCandles > 0) {
       const entryTrades = trades.filter((t) => t.side === "buy");
       const lastEntry = entryTrades[entryTrades.length - 1];
-      if (lastEntry && currentIndex - lastEntry.candleIndex < riskSettings.minHoldCandles) return false;
+      if (lastEntry && currentIndex - lastEntry.candleIndex < riskSettings.minHoldCandles) {
+        const remaining = riskSettings.minHoldCandles - (currentIndex - lastEntry.candleIndex);
+        set({ lastOrderError: `Hold requirement: wait ${remaining} more candle${remaining !== 1 ? "s" : ""}` });
+        return false;
+      }
     }
 
-    set({ isPendingExecution: riskSettings.executionDelayMs > 0 });
+    set({ isPendingExecution: riskSettings.executionDelayMs > 0, lastOrderError: null });
 
     const executeTrade = () => {
       const s = get();
@@ -621,7 +638,7 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
   setYahooInsights: (insights) => set({ yahooInsights: insights }),
   getSessionScore: () => { const { trades, closedTrades, currentIndex } = get(); return calculateSessionScore(trades, closedTrades, currentIndex); },
   getCurrentRegime: () => { const { regimes, currentIndex, yahooInsights } = get(); if (regimes.length === 0) return yahooInsights?.regime ?? "choppy"; return regimes.reduce((c, r) => r.startIndex <= currentIndex ? r : c, regimes[0]).regime; },
-  reset: () => set({ symbol: "", date: "", candles: [], currentIndex: 0, isPlaying: false, speed: 1, cash: STARTING_CASH, startingCash: STARTING_CASH, position: null, trades: [], closedTrades: [], realizedPnl: 0, isLockedOut: false, isPendingExecution: false, regimes: [], currentPrice: 0, pnl: 0, contextEndIndex: 0, isStudyPhase: false, contextCandles: [], contextInterval: "", tradingCandlesStored: [], tradingStartOffset: 0, microTickCount: 0, microPath: [], showPreSession: false, showPostSession: false, preSessionReflection: null, postSessionReflection: null, sessionEnded: false, yahooInsights: null }),
+  reset: () => set({ symbol: "", date: "", candles: [], currentIndex: 0, isPlaying: false, speed: 1, cash: STARTING_CASH, startingCash: STARTING_CASH, position: null, trades: [], closedTrades: [], realizedPnl: 0, isLockedOut: false, isPendingExecution: false, regimes: [], currentPrice: 0, pnl: 0, contextEndIndex: 0, isStudyPhase: false, contextCandles: [], contextInterval: "", tradingCandlesStored: [], tradingStartOffset: 0, microTickCount: 0, microPath: [], showPreSession: false, showPostSession: false, preSessionReflection: null, postSessionReflection: null, sessionEnded: false, lastOrderError: null, yahooInsights: null }),
 }), {
   name: "stock-sim-settings",
   partialize: (state) => ({

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useSimulationStore } from "@/store/simulation";
 import TradeJournalModal from "./TradeJournalModal";
 import type { TradeJournal } from "@/types/market";
@@ -24,6 +24,7 @@ export default function OrderPanel() {
     isPlaying,
     pause,
     play,
+    lastOrderError,
   } = useSimulationStore();
   const [quantity, setQuantity] = useState(10);
   const [stopPrice, setStopPrice] = useState<string>("");
@@ -37,6 +38,15 @@ export default function OrderPanel() {
   const totalEquity = cash + positionValue;
   const isLoaded = candles.length > 0;
 
+  // Auto-dismiss order errors after 4 seconds
+  useEffect(() => {
+    if (!lastOrderError) return;
+    const timer = setTimeout(() => {
+      useSimulationStore.setState({ lastOrderError: null });
+    }, 4000);
+    return () => clearTimeout(timer);
+  }, [lastOrderError]);
+
   // Market hours check (Eastern Time)
   const currentCandle = candles[currentIndex];
   const etTimeStr = currentCandle ? new Date(currentCandle.time * 1000).toLocaleTimeString("en-US", { hour12: false, hour: "2-digit", minute: "2-digit", timeZone: "America/New_York" }) : "00:00";
@@ -47,6 +57,10 @@ export default function OrderPanel() {
   const parsedStop = stopPrice ? parseFloat(stopPrice) : undefined;
   const maxShares =
     parsedStop && parsedStop < currentPrice ? calculateMaxShares(parsedStop) : null;
+
+  // Actual buy cost including spread + commission (must match buy() logic in store)
+  const askPrice = currentPrice * (1 + riskSettings.spreadBps / 10000);
+  const actualBuyCost = askPrice * quantity + riskSettings.commissionPerTrade;
 
   const handleBuy = () => {
     setWasPlaying(isPlaying);
@@ -63,25 +77,28 @@ export default function OrderPanel() {
   };
 
   const handleJournalConfirm = (journal: TradeJournal) => {
+    let success = false;
     if (pendingAction?.type === "buy") {
-      buy(pendingAction.qty, parsedStop, journal);
+      success = buy(pendingAction.qty, parsedStop, journal);
     } else if (pendingAction?.type === "sell") {
-      sell(pendingAction.qty, journal);
+      success = sell(pendingAction.qty, journal);
     }
     setJournalMode(null);
     setPendingAction(null);
-    if (wasPlaying) play();
+    // Only resume playback if the order succeeded
+    if (success && wasPlaying) play();
   };
 
   const handleJournalSkip = () => {
+    let success = false;
     if (pendingAction?.type === "buy") {
-      buy(pendingAction.qty, parsedStop);
+      success = buy(pendingAction.qty, parsedStop);
     } else if (pendingAction?.type === "sell") {
-      sell(pendingAction.qty);
+      success = sell(pendingAction.qty);
     }
     setJournalMode(null);
     setPendingAction(null);
-    if (wasPlaying) play();
+    if (success && wasPlaying) play();
   };
 
   const handleJournalCancel = () => {
@@ -184,7 +201,7 @@ export default function OrderPanel() {
         <div className="grid grid-cols-2 gap-2">
           <button
             onClick={handleBuy}
-            disabled={!isLoaded || isOutsideMarketHours || currentPrice * quantity > cash || isLockedOut || !!cooldownBlocked}
+            disabled={!isLoaded || isOutsideMarketHours || actualBuyCost > cash || isLockedOut || !!cooldownBlocked}
             className="bg-green-600 hover:bg-green-500 disabled:bg-slate-600 disabled:cursor-not-allowed text-white py-2 rounded font-semibold transition-colors"
           >
             BUY
@@ -203,6 +220,24 @@ export default function OrderPanel() {
           <div className="bg-slate-700/50 border border-slate-600 rounded px-3 py-1.5 text-center">
             <span className="text-slate-400 text-[11px]">
               🌙 Market closed — trading resumes at 9:30 AM ET
+            </span>
+          </div>
+        )}
+
+        {/* Order error feedback */}
+        {lastOrderError && !isOutsideMarketHours && (
+          <div className="bg-red-900/30 border border-red-700/50 rounded px-3 py-1.5 text-center animate-pulse">
+            <span className="text-red-300 text-[11px]">
+              ⚠️ {lastOrderError}
+            </span>
+          </div>
+        )}
+
+        {/* Insufficient funds warning (always visible, not just after failed click) */}
+        {!isOutsideMarketHours && !lastOrderError && actualBuyCost > cash && !position && (
+          <div className="bg-orange-900/30 border border-orange-700/50 rounded px-3 py-1.5 text-center">
+            <span className="text-orange-300 text-[11px]">
+              💰 Cost ${actualBuyCost.toFixed(2)} exceeds cash ${cash.toFixed(2)} — reduce shares
             </span>
           </div>
         )}

@@ -34,18 +34,18 @@ interface IndicatorSettings {
 const DEFAULT_MAS: MovingAverageConfig[] = [
   { id: "sma-9", period: 9, type: "sma", color: "#22d3ee", enabled: false },
   { id: "ema-9", period: 9, type: "ema", color: "#34d399", enabled: false },
-  { id: "sma-20", period: 20, type: "sma", color: "#f59e0b", enabled: true },
-  { id: "sma-50", period: 50, type: "sma", color: "#8b5cf6", enabled: true },
+  { id: "ema-20", period: 20, type: "ema", color: "#f59e0b", enabled: true },
+  { id: "sma-50", period: 50, type: "sma", color: "#8b5cf6", enabled: false },
   { id: "sma-100", period: 100, type: "sma", color: "#ec4899", enabled: false },
   { id: "sma-200", period: 200, type: "sma", color: "#ef4444", enabled: false },
 ];
 
 export const useIndicatorStore = create<IndicatorSettings>((set) => ({
   showVolume: true,
-  showRSI: true,
-  showMACD: true,
-  showBollingerBands: false,
-  showVWAP: false,
+  showRSI: false,
+  showMACD: false,
+  showBollingerBands: true,
+  showVWAP: true,
   showDropPercent: false,
   movingAverages: DEFAULT_MAS,
 
