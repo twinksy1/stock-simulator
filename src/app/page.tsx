@@ -38,6 +38,7 @@ export default function Home() {
   const recordCurrentSession = useCallback(() => {
     const sim = useSimulationStore.getState();
     const perf = usePerformanceStore.getState();
+    if (sim.sessionRecorded) return;
     if (sim.closedTrades.length === 0) return;
 
     const closedTrades = sim.closedTrades;
@@ -64,6 +65,8 @@ export default function Home() {
       worstR,
       grade: score.overallGrade,
     });
+
+    useSimulationStore.getState().markSessionRecorded();
   }, []);
 
   const handlePostSubmit = useCallback((reflection: PostSessionReflection) => {

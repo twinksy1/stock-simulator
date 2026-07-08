@@ -58,6 +58,9 @@ interface SimulationState {
   // Order feedback
   lastOrderError: string | null;
 
+  // Guard: ensures a completed session is recorded to performance history only once
+  sessionRecorded: boolean;
+
   // Yahoo insights for real data sessions
   yahooInsights: YahooInsights | null;
 
@@ -87,6 +90,7 @@ interface SimulationState {
   submitPostSession: (reflection: PostSessionReflection) => void;
   dismissPostSession: () => void;
   setYahooInsights: (insights: YahooInsights) => void;
+  markSessionRecorded: () => void;
   getSessionScore: () => SessionScore;
   getCurrentRegime: () => MarketRegime;
   reset: () => void;
@@ -350,6 +354,7 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
   sessionEnded: false,
   lastOrderError: null,
   yahooInsights: null,
+  sessionRecorded: false,
 
   loadSession: (symbol, date, candles, contextEndIndex = 0, startBalance, contextCandles, contextInterval, tradingStartOffset = 0) => {
     const balance = startBalance ?? STARTING_CASH;
@@ -373,6 +378,7 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
         contextEndIndex: startIdx,
         isStudyPhase: true,
         yahooInsights: null,
+        sessionRecorded: false,
       });
     } else {
       // Single-TF mode (1d or fallback): study + trading on same candle series
@@ -391,6 +397,7 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
         contextEndIndex: startIndex,
         isStudyPhase: contextEndIndex > 0,
         yahooInsights: null,
+        sessionRecorded: false,
       });
     }
   },
@@ -636,9 +643,10 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
     set({ showPostSession: false });
   },
   setYahooInsights: (insights) => set({ yahooInsights: insights }),
+  markSessionRecorded: () => set({ sessionRecorded: true }),
   getSessionScore: () => { const { trades, closedTrades, currentIndex } = get(); return calculateSessionScore(trades, closedTrades, currentIndex); },
   getCurrentRegime: () => { const { regimes, currentIndex, yahooInsights } = get(); if (regimes.length === 0) return yahooInsights?.regime ?? "choppy"; return regimes.reduce((c, r) => r.startIndex <= currentIndex ? r : c, regimes[0]).regime; },
-  reset: () => set({ symbol: "", date: "", candles: [], currentIndex: 0, isPlaying: false, speed: 1, cash: STARTING_CASH, startingCash: STARTING_CASH, position: null, trades: [], closedTrades: [], realizedPnl: 0, isLockedOut: false, isPendingExecution: false, regimes: [], currentPrice: 0, pnl: 0, contextEndIndex: 0, isStudyPhase: false, contextCandles: [], contextInterval: "", tradingCandlesStored: [], tradingStartOffset: 0, microTickCount: 0, microPath: [], showPreSession: false, showPostSession: false, preSessionReflection: null, postSessionReflection: null, sessionEnded: false, lastOrderError: null, yahooInsights: null }),
+  reset: () => set({ symbol: "", date: "", candles: [], currentIndex: 0, isPlaying: false, speed: 1, cash: STARTING_CASH, startingCash: STARTING_CASH, position: null, trades: [], closedTrades: [], realizedPnl: 0, isLockedOut: false, isPendingExecution: false, regimes: [], currentPrice: 0, pnl: 0, contextEndIndex: 0, isStudyPhase: false, contextCandles: [], contextInterval: "", tradingCandlesStored: [], tradingStartOffset: 0, microTickCount: 0, microPath: [], showPreSession: false, showPostSession: false, preSessionReflection: null, postSessionReflection: null, sessionEnded: false, lastOrderError: null, yahooInsights: null, sessionRecorded: false }),
 }), {
   name: "stock-sim-settings",
   partialize: (state) => ({
