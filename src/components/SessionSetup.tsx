@@ -2,7 +2,7 @@
 
 import { useState, useMemo } from "react";
 import { useSimulationStore } from "@/store/simulation";
-import type { Candle } from "@/types/market";
+import type { Candle, AltTimeframeView } from "@/types/market";
 import { findWindowsByVolatility, type VolatilityMode } from "@/lib/volatility";
 
 const POPULAR_SYMBOLS = ["MSFT", "AAPL", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "SPY", "QQQ", "AMD", "NFLX", "JPM"];
@@ -37,6 +37,13 @@ const CONTEXT_CONFIG: Record<Interval, ContextConfig | null> = {
   "30m": { interval: "1d", range: "10y",  maxCandles: 120 },
   "1h":  { interval: "1d", range: "10y",  maxCandles: 120 },
   "1d":  null, // No higher TF — use single-TF mode
+};
+
+// Higher-timeframe display overlays offered per base interval (display-only;
+// trading stays anchored to the base interval). Intraday-only, within the ~7d window.
+const ALT_VIEW_INTERVALS: Partial<Record<Interval, Interval[]>> = {
+  "1m": ["2m", "5m"],
+  "2m": ["5m"],
 };
 
 // ─── Difficulty System ───────────────────────────────────────────────
@@ -389,32 +396,33 @@ export default function SessionSetup() {
       const fullTradingData = [...lookback, ...tradingSlice];
       const tradingStartOffset = lookback.length;
 
-      // 5b. Alt-timeframe overlay: for 2m sessions, fetch 5m candles spanning the same window
-      //     (display-only 5m view; trading stays anchored to the 2m timeline)
-      let altCandles: Candle[] = [];
-      let altIntervalUsed = "";
-      if (interval === "2m") {
+      // 5b. Alt-timeframe overlays: fetch higher-TF series spanning the same window.
+      //     Display-only views (trading stays anchored to the base timeline).
+      //     1m sessions get 2m + 5m views; 2m sessions get a 5m view.
+      const altViews: AltTimeframeView[] = [];
+      const altIntervals = ALT_VIEW_INTERVALS[interval] ?? [];
+      const firstTime = fullTradingData[0].time;
+      const lastTime = fullTradingData[fullTradingData.length - 1].time;
+      for (const altInt of altIntervals) {
         try {
-          const altRes = await fetch(`/api/data/historical?symbol=${targetSymbol}&interval=5m&range=57d`);
+          const altRes = await fetch(`/api/data/historical?symbol=${targetSymbol}&interval=${altInt}&range=${MAX_RANGE[altInt]}`);
           if (altRes.ok) {
             const altData = await altRes.json();
             const allAltCandles: Candle[] = altData.candles;
-            const firstTime = fullTradingData[0].time;
-            const lastTime = fullTradingData[fullTradingData.length - 1].time;
-            altCandles = allAltCandles.filter((c) => c.time >= firstTime && c.time <= lastTime);
-            if (altCandles.length > 0) altIntervalUsed = "5m";
+            const windowCandles = allAltCandles.filter((c) => c.time >= firstTime && c.time <= lastTime);
+            if (windowCandles.length > 0) altViews.push({ interval: altInt, candles: windowCandles });
           }
         } catch {
-          // Alt overlay is optional — session works without it
+          // Alt overlays are optional — session works without them
         }
       }
 
       // 6. Load session
       if (contextSlice.length > 10) {
-        loadSession(targetSymbol, interval, fullTradingData, 0, startBalance, contextSlice, contextIntervalUsed, tradingStartOffset, altCandles, altIntervalUsed);
+        loadSession(targetSymbol, interval, fullTradingData, 0, startBalance, contextSlice, contextIntervalUsed, tradingStartOffset, altViews);
       } else {
         // No higher-TF context — start directly with trading data (lookback is still prepended)
-        loadSession(targetSymbol, interval, fullTradingData, tradingStartOffset, startBalance, undefined, undefined, undefined, altCandles, altIntervalUsed);
+        loadSession(targetSymbol, interval, fullTradingData, tradingStartOffset, startBalance, undefined, undefined, undefined, altViews);
       }
 
       fetchAndApplyInsights(targetSymbol);

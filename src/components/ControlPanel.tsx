@@ -7,10 +7,10 @@ import type { PlaybackSpeed } from "@/types/market";
 const SPEEDS: PlaybackSpeed[] = [1, 2, 5, 10];
 
 export default function ControlPanel() {
-  const { isPlaying, speed, currentIndex, candles, play, pause, setSpeed, jumpTo, tick, isStudyPhase, contextEndIndex, microNoiseEnabled, microTicksPerCandle, viewMode, altCandles, altInterval, toggleView, date: tradingInterval } =
+  const { isPlaying, speed, currentIndex, candles, play, pause, setSpeed, jumpTo, tick, isStudyPhase, contextEndIndex, microNoiseEnabled, microTicksPerCandle, activeView, altViews, setView, date: tradingInterval } =
     useSimulationStore();
 
-  const hasAltView = altCandles.length > 0 && !isStudyPhase;
+  const hasAltView = altViews.length > 0 && !isStudyPhase;
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -86,28 +86,31 @@ export default function ControlPanel() {
           ))}
         </div>
 
-        {/* Timeframe view toggle (e.g. 2m ↔ 5m). Display-only; trading stays on the base timeframe. */}
+        {/* Timeframe view toggle (e.g. 1m base with 2m/5m views). Display-only; trading stays on the base timeframe. */}
         {hasAltView && (
           <div className="flex items-center gap-1">
             <span className="text-[10px] text-slate-500 uppercase tracking-wide mr-0.5">View</span>
             <button
-              onClick={() => { if (viewMode !== "base") toggleView(); }}
+              onClick={() => setView("base")}
               className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
-                viewMode === "base" ? "bg-indigo-600 text-white" : "bg-slate-700 text-slate-300 hover:bg-slate-600"
+                activeView === "base" ? "bg-indigo-600 text-white" : "bg-slate-700 text-slate-300 hover:bg-slate-600"
               }`}
               title="Trade on this timeframe"
             >
               {tradingInterval}
             </button>
-            <button
-              onClick={() => { if (viewMode !== "alt") toggleView(); }}
-              className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
-                viewMode === "alt" ? "bg-indigo-600 text-white" : "bg-slate-700 text-slate-300 hover:bg-slate-600"
-              }`}
-              title="Higher-timeframe context view (completed bars only)"
-            >
-              {altInterval}
-            </button>
+            {altViews.map((v) => (
+              <button
+                key={v.interval}
+                onClick={() => setView(v.interval)}
+                className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                  activeView === v.interval ? "bg-indigo-600 text-white" : "bg-slate-700 text-slate-300 hover:bg-slate-600"
+                }`}
+                title="Higher-timeframe context view (completed bars only)"
+              >
+                {v.interval}
+              </button>
+            ))}
           </div>
         )}
 

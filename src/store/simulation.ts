@@ -14,6 +14,7 @@ import type {
   PreSessionReflection,
   PostSessionReflection,
   YahooInsights,
+  AltTimeframeView,
 } from "@/types/market";
 
 interface SimulationState {
@@ -64,10 +65,9 @@ interface SimulationState {
   // Yahoo insights for real data sessions
   yahooInsights: YahooInsights | null;
 
-  // Alt timeframe view (display-only overlay, e.g. 5m view of a 2m session)
-  altCandles: Candle[];
-  altInterval: string;
-  viewMode: "base" | "alt";
+  // Alt timeframe views (display-only overlays, e.g. 2m/5m views of a 1m session)
+  altViews: AltTimeframeView[];
+  activeView: string; // "base" or an alt interval (e.g. "5m")
 
   loadSession: (
     symbol: string,
@@ -78,10 +78,9 @@ interface SimulationState {
     contextCandles?: Candle[],
     contextInterval?: string,
     tradingStartOffset?: number,
-    altCandles?: Candle[],
-    altInterval?: string
+    altViews?: AltTimeframeView[]
   ) => void;
-  toggleView: () => void;
+  setView: (view: string) => void;
   goLive: () => void;
   tick: () => void;
   play: () => void;
@@ -363,11 +362,10 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
   lastOrderError: null,
   yahooInsights: null,
   sessionRecorded: false,
-  altCandles: [],
-  altInterval: "",
-  viewMode: "base",
+  altViews: [],
+  activeView: "base",
 
-  loadSession: (symbol, date, candles, contextEndIndex = 0, startBalance, contextCandles, contextInterval, tradingStartOffset = 0, altCandles, altInterval) => {
+  loadSession: (symbol, date, candles, contextEndIndex = 0, startBalance, contextCandles, contextInterval, tradingStartOffset = 0, altViews) => {
     const balance = startBalance ?? STARTING_CASH;
 
     if (contextCandles && contextCandles.length > 0) {
@@ -390,9 +388,8 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
         isStudyPhase: true,
         yahooInsights: null,
         sessionRecorded: false,
-        altCandles: altCandles ?? [],
-        altInterval: altInterval ?? "",
-        viewMode: "base",
+        altViews: altViews ?? [],
+        activeView: "base",
       });
     } else {
       // Single-TF mode (1d or fallback): study + trading on same candle series
@@ -412,9 +409,8 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
         isStudyPhase: contextEndIndex > 0,
         yahooInsights: null,
         sessionRecorded: false,
-        altCandles: altCandles ?? [],
-        altInterval: altInterval ?? "",
-        viewMode: "base",
+        altViews: altViews ?? [],
+        activeView: "base",
       });
     }
   },
@@ -661,14 +657,16 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
   },
   setYahooInsights: (insights) => set({ yahooInsights: insights }),
   markSessionRecorded: () => set({ sessionRecorded: true }),
-  toggleView: () => {
+  setView: (view) => {
     const s = get();
-    if (s.isStudyPhase || s.altCandles.length === 0) return;
-    set({ viewMode: s.viewMode === "base" ? "alt" : "base" });
+    if (s.isStudyPhase) return;
+    if (view === "base" || s.altViews.some((v) => v.interval === view)) {
+      set({ activeView: view });
+    }
   },
   getSessionScore: () => { const { trades, closedTrades, currentIndex } = get(); return calculateSessionScore(trades, closedTrades, currentIndex); },
   getCurrentRegime: () => { const { regimes, currentIndex, yahooInsights } = get(); if (regimes.length === 0) return yahooInsights?.regime ?? "choppy"; return regimes.reduce((c, r) => r.startIndex <= currentIndex ? r : c, regimes[0]).regime; },
-  reset: () => set({ symbol: "", date: "", candles: [], currentIndex: 0, isPlaying: false, speed: 1, cash: STARTING_CASH, startingCash: STARTING_CASH, position: null, trades: [], closedTrades: [], realizedPnl: 0, isLockedOut: false, isPendingExecution: false, regimes: [], currentPrice: 0, pnl: 0, contextEndIndex: 0, isStudyPhase: false, contextCandles: [], contextInterval: "", tradingCandlesStored: [], tradingStartOffset: 0, microTickCount: 0, microPath: [], showPreSession: false, showPostSession: false, preSessionReflection: null, postSessionReflection: null, sessionEnded: false, lastOrderError: null, yahooInsights: null, sessionRecorded: false, altCandles: [], altInterval: "", viewMode: "base" }),
+  reset: () => set({ symbol: "", date: "", candles: [], currentIndex: 0, isPlaying: false, speed: 1, cash: STARTING_CASH, startingCash: STARTING_CASH, position: null, trades: [], closedTrades: [], realizedPnl: 0, isLockedOut: false, isPendingExecution: false, regimes: [], currentPrice: 0, pnl: 0, contextEndIndex: 0, isStudyPhase: false, contextCandles: [], contextInterval: "", tradingCandlesStored: [], tradingStartOffset: 0, microTickCount: 0, microPath: [], showPreSession: false, showPostSession: false, preSessionReflection: null, postSessionReflection: null, sessionEnded: false, lastOrderError: null, yahooInsights: null, sessionRecorded: false, altViews: [], activeView: "base" }),
 }), {
   name: "stock-sim-settings",
   partialize: (state) => ({

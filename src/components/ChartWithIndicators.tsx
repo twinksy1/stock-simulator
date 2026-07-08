@@ -111,26 +111,28 @@ export default function ChartWithIndicators() {
   const candles = useSimulationStore((s) => s.candles);
   const currentIndex = useSimulationStore((s) => s.currentIndex);
   const currentPrice = useSimulationStore((s) => s.currentPrice);
-  const viewMode = useSimulationStore((s) => s.viewMode);
-  const altCandles = useSimulationStore((s) => s.altCandles);
-  const altInterval = useSimulationStore((s) => s.altInterval);
+  const activeView = useSimulationStore((s) => s.activeView);
+  const altViews = useSimulationStore((s) => s.altViews);
 
-  // Display series: in "alt" view show the higher-TF candles up to the last
+  // Display series: in an alt view show the higher-TF candles up to the last
   // COMPLETED bar at the current base-timeframe market time (lookahead-safe).
   // Trading/engine state stays on the base series; this only affects rendering.
   const { displayCandles, displayIndex } = useMemo(() => {
-    if (viewMode === "alt" && altCandles.length > 0) {
-      const currentTime = candles[currentIndex]?.time ?? 0;
-      const altSecs = intervalToSeconds(altInterval);
-      let di = -1;
-      for (let i = 0; i < altCandles.length; i++) {
-        if (altCandles[i].time + altSecs <= currentTime) di = i;
-        else break;
+    if (activeView !== "base") {
+      const av = altViews.find((v) => v.interval === activeView);
+      if (av && av.candles.length > 0) {
+        const currentTime = candles[currentIndex]?.time ?? 0;
+        const altSecs = intervalToSeconds(av.interval);
+        let di = -1;
+        for (let i = 0; i < av.candles.length; i++) {
+          if (av.candles[i].time + altSecs <= currentTime) di = i;
+          else break;
+        }
+        return { displayCandles: av.candles, displayIndex: di };
       }
-      return { displayCandles: altCandles, displayIndex: di };
     }
     return { displayCandles: candles, displayIndex: currentIndex };
-  }, [viewMode, altCandles, altInterval, candles, currentIndex]);
+  }, [activeView, altViews, candles, currentIndex]);
 
   const { showVolume, showRSI, showMACD, showBollingerBands, showVWAP, showDropPercent, movingAverages } = useIndicatorStore();
   const enabledMAs = useMemo(

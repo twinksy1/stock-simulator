@@ -9,6 +9,13 @@ export interface Candle {
   sellVolume?: number;
 }
 
+// A higher-timeframe series aligned to the same window as the base trading
+// series, used as a display-only overlay (e.g. viewing 5m during a 1m session).
+export interface AltTimeframeView {
+  interval: string;
+  candles: Candle[];
+}
+
 export type Confidence = 1 | 2 | 3 | 4 | 5;
 
 export type SetupLabel =
