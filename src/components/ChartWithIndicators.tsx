@@ -14,6 +14,15 @@ import { useIndicatorStore } from "@/store/indicators";
 import { computeIndicators } from "@/lib/indicators";
 import type { Candle } from "@/types/market";
 
+/** Convert an interval label (e.g. "5m", "1h", "1d") to seconds. */
+function intervalToSeconds(interval: string): number {
+  const m = /^(\d+)(m|h|d)$/.exec(interval);
+  if (!m) return 300;
+  const n = parseInt(m[1], 10);
+  const unit = m[2];
+  return unit === "m" ? n * 60 : unit === "h" ? n * 3600 : n * 86400;
+}
+
 /** Detect completed bearish legs in visible candles.
  *  A "drop" = swing high → swing low where at least 2 candles moved down.
  *  Returns array of { index, pctDrop } for completed drops only. */
@@ -102,6 +111,26 @@ export default function ChartWithIndicators() {
   const candles = useSimulationStore((s) => s.candles);
   const currentIndex = useSimulationStore((s) => s.currentIndex);
   const currentPrice = useSimulationStore((s) => s.currentPrice);
+  const viewMode = useSimulationStore((s) => s.viewMode);
+  const altCandles = useSimulationStore((s) => s.altCandles);
+  const altInterval = useSimulationStore((s) => s.altInterval);
+
+  // Display series: in "alt" view show the higher-TF candles up to the last
+  // COMPLETED bar at the current base-timeframe market time (lookahead-safe).
+  // Trading/engine state stays on the base series; this only affects rendering.
+  const { displayCandles, displayIndex } = useMemo(() => {
+    if (viewMode === "alt" && altCandles.length > 0) {
+      const currentTime = candles[currentIndex]?.time ?? 0;
+      const altSecs = intervalToSeconds(altInterval);
+      let di = -1;
+      for (let i = 0; i < altCandles.length; i++) {
+        if (altCandles[i].time + altSecs <= currentTime) di = i;
+        else break;
+      }
+      return { displayCandles: altCandles, displayIndex: di };
+    }
+    return { displayCandles: candles, displayIndex: currentIndex };
+  }, [viewMode, altCandles, altInterval, candles, currentIndex]);
 
   const { showVolume, showRSI, showMACD, showBollingerBands, showVWAP, showDropPercent, movingAverages } = useIndicatorStore();
   const enabledMAs = useMemo(
@@ -109,12 +138,13 @@ export default function ChartWithIndicators() {
     [movingAverages]
   );
 
-  // Compute indicators for the full dataset
+  // Compute indicators for the full displayed dataset
+  const maKey = movingAverages.map((m) => `${m.id}:${m.type}:${m.period}`).join(",");
   const indicators = useMemo(() => {
-    if (candles.length === 0) return null;
-    return computeIndicators(candles, movingAverages);
+    if (displayCandles.length === 0) return null;
+    return computeIndicators(displayCandles, movingAverages);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [candles, movingAverages.map((m) => `${m.id}:${m.type}:${m.period}`).join(",")]);
+  }, [displayCandles, maKey]);
 
   // Create all three charts once
   useEffect(() => {
@@ -304,22 +334,24 @@ export default function ChartWithIndicators() {
   // Track what was last rendered to enable incremental updates
   const lastRenderedIndexRef = useRef<number>(-1);
   const lastIndicatorTogglesRef = useRef<string>("");
+  const lastDisplayCandlesRef = useRef<Candle[] | null>(null);
 
   // Build a toggle key to detect when indicators change (requires full redraw)
   const toggleKey = `${showVolume}-${showRSI}-${showMACD}-${showBollingerBands}-${showVWAP}-${showDropPercent}-${enabledMAs.map(m => m.id).join(",")}`;
 
   // Update chart data — incremental when just ticking forward, full redraw on jumps/toggles
   useEffect(() => {
-    if (!candleSeriesRef.current || candles.length === 0 || !indicators) return;
+    if (!candleSeriesRef.current || displayCandles.length === 0 || !indicators || displayIndex < 0) return;
 
-    const slice = currentIndex + 1;
+    const slice = displayIndex + 1;
     const prevIndex = lastRenderedIndexRef.current;
     const togglesChanged = toggleKey !== lastIndicatorTogglesRef.current;
-    const isIncremental = !togglesChanged && currentIndex === prevIndex + 1 && prevIndex >= 0;
+    const seriesSwapped = lastDisplayCandlesRef.current !== displayCandles;
+    const isIncremental = !togglesChanged && !seriesSwapped && displayIndex === prevIndex + 1 && prevIndex >= 0;
 
     if (isIncremental) {
       // FAST PATH: Only append the new data point to each series
-      const c = candles[currentIndex];
+      const c = displayCandles[displayIndex];
       const t = c.time as Time;
 
       candleSeriesRef.current.update({ time: t, open: c.open, high: c.high, low: c.low, close: c.close });
@@ -332,30 +364,30 @@ export default function ChartWithIndicators() {
         const series = maSeriesMapRef.current.get(ma.id);
         const maLine = indicators.maLines.find((s) => s.id === ma.id);
         if (series && maLine) {
-          const val = maLine.values[currentIndex];
+          const val = maLine.values[displayIndex];
           if (val !== null) series.update({ time: t, value: val });
         }
       }
 
       if (showVWAP) {
-        const val = indicators.vwap[currentIndex];
+        const val = indicators.vwap[displayIndex];
         if (val !== null) vwapSeriesRef.current?.update({ time: t, value: val });
       }
 
       if (showBollingerBands && indicators.bollingerBands) {
         const bb = indicators.bollingerBands;
-        if (bb.upper[currentIndex] !== null) bbUpperRef.current?.update({ time: t, value: bb.upper[currentIndex]! });
-        if (bb.middle[currentIndex] !== null) bbMiddleRef.current?.update({ time: t, value: bb.middle[currentIndex]! });
-        if (bb.lower[currentIndex] !== null) bbLowerRef.current?.update({ time: t, value: bb.lower[currentIndex]! });
+        if (bb.upper[displayIndex] !== null) bbUpperRef.current?.update({ time: t, value: bb.upper[displayIndex]! });
+        if (bb.middle[displayIndex] !== null) bbMiddleRef.current?.update({ time: t, value: bb.middle[displayIndex]! });
+        if (bb.lower[displayIndex] !== null) bbLowerRef.current?.update({ time: t, value: bb.lower[displayIndex]! });
       }
 
       if (showRSI) {
-        const val = indicators.rsi[currentIndex];
+        const val = indicators.rsi[displayIndex];
         if (val !== null) rsiSeriesRef.current?.update({ time: t, value: val });
       }
 
       if (showMACD) {
-        const m = indicators.macd[currentIndex];
+        const m = indicators.macd[displayIndex];
         if (m.macd !== null) macdLineRef.current?.update({ time: t, value: m.macd });
         if (m.signal !== null) signalLineRef.current?.update({ time: t, value: m.signal });
         if (m.histogram !== null) macdHistRef.current?.update({ time: t, value: m.histogram, color: m.histogram >= 0 ? "#22c55e80" : "#ef444480" });
@@ -363,10 +395,10 @@ export default function ChartWithIndicators() {
 
       // Drop markers: only recompute if last candle was bearish (potential new drop completed)
       if (showDropPercent && dropMarkersRef.current) {
-        const prev = candles[currentIndex - 1];
+        const prev = displayCandles[displayIndex - 1];
         if (c.close >= prev.close) {
           // Reversal candle — a drop may have just completed
-          const drops = detectDrops(candles, currentIndex);
+          const drops = detectDrops(displayCandles, displayIndex);
           const markers: SeriesMarker<Time>[] = drops.map((d) => {
             const pct = d.pctDrop;
             let color: string;
@@ -374,23 +406,23 @@ export default function ChartWithIndicators() {
             if (pct >= 1.0) color = "#ef4444";
             else if (pct >= 0.5) { color = "#eab308"; }
             else { color = "#6b7280"; shape = "circle"; }
-            return { time: candles[d.index].time as Time, position: "belowBar" as const, color, shape, text: `−${pct.toFixed(2)}%` };
+            return { time: displayCandles[d.index].time as Time, position: "belowBar" as const, color, shape, text: `−${pct.toFixed(2)}%` };
           });
           dropMarkersRef.current.setMarkers(markers);
         }
       }
 
     } else {
-      // FULL REDRAW: initial load, jump, or indicator toggle change
+      // FULL REDRAW: initial load, jump, view swap, or indicator toggle change
       candleSeriesRef.current.setData(
-        candles.slice(0, slice).map((c) => ({
+        displayCandles.slice(0, slice).map((c) => ({
           time: c.time as Time, open: c.open, high: c.high, low: c.low, close: c.close,
         }))
       );
 
       if (showVolume) {
         volumeSeriesRef.current?.setData(
-          candles.slice(0, slice).map((c) => ({
+          displayCandles.slice(0, slice).map((c) => ({
             time: c.time as Time, value: c.volume, color: c.close >= c.open ? "#22c55e40" : "#ef444440",
           }))
         );
@@ -404,7 +436,7 @@ export default function ChartWithIndicators() {
         if (series && maLine) {
           series.setData(
             maLine.values.slice(0, slice).reduce<{ time: Time; value: number }[]>(
-              (acc, val, i) => { if (val !== null) acc.push({ time: candles[i].time as Time, value: val }); return acc; }, []
+              (acc, val, i) => { if (val !== null) acc.push({ time: displayCandles[i].time as Time, value: val }); return acc; }, []
             )
           );
         }
@@ -413,7 +445,7 @@ export default function ChartWithIndicators() {
       if (showVWAP) {
         vwapSeriesRef.current?.setData(
           indicators.vwap.slice(0, slice).reduce<{ time: Time; value: number }[]>((acc, val, i) => {
-            if (val !== null) acc.push({ time: candles[i].time as Time, value: val }); return acc;
+            if (val !== null) acc.push({ time: displayCandles[i].time as Time, value: val }); return acc;
           }, [])
         );
       } else { vwapSeriesRef.current?.setData([]); }
@@ -421,7 +453,7 @@ export default function ChartWithIndicators() {
       if (showBollingerBands && indicators.bollingerBands) {
         const toLineData = (arr: (number | null)[]) =>
           arr.slice(0, slice).reduce<{ time: Time; value: number }[]>((acc, val, i) => {
-            if (val !== null) acc.push({ time: candles[i].time as Time, value: val }); return acc;
+            if (val !== null) acc.push({ time: displayCandles[i].time as Time, value: val }); return acc;
           }, []);
         bbUpperRef.current?.setData(toLineData(indicators.bollingerBands.upper));
         bbMiddleRef.current?.setData(toLineData(indicators.bollingerBands.middle));
@@ -435,7 +467,7 @@ export default function ChartWithIndicators() {
       if (showRSI) {
         rsiSeriesRef.current?.setData(
           indicators.rsi.slice(0, slice).reduce<{ time: Time; value: number }[]>((acc, val, i) => {
-            if (val !== null) acc.push({ time: candles[i].time as Time, value: val }); return acc;
+            if (val !== null) acc.push({ time: displayCandles[i].time as Time, value: val }); return acc;
           }, [])
         );
       } else { rsiSeriesRef.current?.setData([]); }
@@ -446,9 +478,9 @@ export default function ChartWithIndicators() {
         const histData: { time: Time; value: number; color: string }[] = [];
         for (let i = 0; i < slice; i++) {
           const m = indicators.macd[i];
-          if (m.macd !== null) macdData.push({ time: candles[i].time as Time, value: m.macd });
-          if (m.signal !== null) signalData.push({ time: candles[i].time as Time, value: m.signal });
-          if (m.histogram !== null) histData.push({ time: candles[i].time as Time, value: m.histogram, color: m.histogram >= 0 ? "#22c55e80" : "#ef444480" });
+          if (m.macd !== null) macdData.push({ time: displayCandles[i].time as Time, value: m.macd });
+          if (m.signal !== null) signalData.push({ time: displayCandles[i].time as Time, value: m.signal });
+          if (m.histogram !== null) histData.push({ time: displayCandles[i].time as Time, value: m.histogram, color: m.histogram >= 0 ? "#22c55e80" : "#ef444480" });
         }
         macdLineRef.current?.setData(macdData);
         signalLineRef.current?.setData(signalData);
@@ -461,7 +493,7 @@ export default function ChartWithIndicators() {
 
       // Drop markers (full recalculate)
       if (showDropPercent && dropMarkersRef.current) {
-        const drops = detectDrops(candles, currentIndex);
+        const drops = detectDrops(displayCandles, displayIndex);
         const markers: SeriesMarker<Time>[] = drops.map((d) => {
           const pct = d.pctDrop;
           let color: string;
@@ -469,21 +501,25 @@ export default function ChartWithIndicators() {
           if (pct >= 1.0) color = "#ef4444";
           else if (pct >= 0.5) { color = "#eab308"; }
           else { color = "#6b7280"; shape = "circle"; }
-          return { time: candles[d.index].time as Time, position: "belowBar" as const, color, shape, text: `−${pct.toFixed(2)}%` };
+          return { time: displayCandles[d.index].time as Time, position: "belowBar" as const, color, shape, text: `−${pct.toFixed(2)}%` };
         });
         dropMarkersRef.current.setMarkers(markers);
       } else if (dropMarkersRef.current) {
         dropMarkersRef.current.setMarkers([]);
       }
+
+      // On a view swap, re-fit the time scale to the newly displayed series
+      if (seriesSwapped) mainChartRef.current?.timeScale().fitContent();
     }
 
-    lastRenderedIndexRef.current = currentIndex;
+    lastRenderedIndexRef.current = displayIndex;
     lastIndicatorTogglesRef.current = toggleKey;
-  }, [candles, currentIndex, indicators, showVolume, showRSI, showMACD, showBollingerBands, showVWAP, showDropPercent, enabledMAs, toggleKey]);
+    lastDisplayCandlesRef.current = displayCandles;
+  }, [displayCandles, displayIndex, indicators, showVolume, showRSI, showMACD, showBollingerBands, showVWAP, showDropPercent, enabledMAs, toggleKey]);
 
-  // Current candle info bar
-  const currentCandle = candles[currentIndex] ?? null;
-  const currentRSI = indicators?.rsi[currentIndex] ?? null;
+  // Current candle info bar (reflects the displayed series)
+  const currentCandle = displayCandles[displayIndex] ?? null;
+  const currentRSI = indicators?.rsi[displayIndex] ?? null;
 
   return (
     <div className="space-y-1">
