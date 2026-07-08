@@ -9,14 +9,15 @@ const POPULAR_SYMBOLS = ["MSFT", "AAPL", "GOOGL", "AMZN", "TSLA", "NVDA", "META"
 
 type Interval = "1m" | "2m" | "5m" | "15m" | "30m" | "1h" | "1d";
 
-// Max range to fetch from Yahoo for each interval
+// Max range to fetch from Yahoo for each interval (verified Yahoo API ceilings
+// via period1/period2). Requesting beyond these throws "data not available".
 const MAX_RANGE: Record<Interval, string> = {
-  "1m": "5d",
-  "2m": "5d",
-  "5m": "57d",
-  "15m": "57d",
-  "30m": "57d",
-  "1h": "720d",
+  "1m": "8d",     // 1m caps at ~8 days
+  "2m": "58d",    // intraday <1h caps at ~59 days
+  "5m": "58d",
+  "15m": "58d",
+  "30m": "58d",
+  "1h": "725d",   // 1h caps at ~729 days
   "1d": "10y",
 };
 

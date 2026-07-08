@@ -79,19 +79,13 @@ function round2(n: number): number {
 
 function getRangeStart(range: string): Date {
   const now = new Date();
+  // Generic "<N>d" handler (e.g. "8d", "58d", "725d") so new day-ranges
+  // never silently fall through to the 1-year default.
+  const dayMatch = /^(\d+)d$/.exec(range);
+  if (dayMatch) {
+    return new Date(now.getTime() - Number(dayMatch[1]) * 86400000);
+  }
   switch (range) {
-    case "5d":
-      return new Date(now.getTime() - 5 * 86400000);
-    case "7d":
-      return new Date(now.getTime() - 7 * 86400000);
-    case "30d":
-      return new Date(now.getTime() - 30 * 86400000);
-    case "57d":
-      return new Date(now.getTime() - 57 * 86400000);
-    case "60d":
-      return new Date(now.getTime() - 60 * 86400000);
-    case "720d":
-      return new Date(now.getTime() - 720 * 86400000);
     case "6mo":
       return new Date(now.getFullYear(), now.getMonth() - 6, now.getDate());
     case "1y":
