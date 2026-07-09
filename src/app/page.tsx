@@ -3,7 +3,7 @@
 import { useCallback } from "react";
 import { useSimulationStore } from "@/store/simulation";
 import { usePerformanceStore } from "@/store/performance";
-import ChartWithIndicators from "@/components/ChartWithIndicators";
+import MultiTimeframeView from "@/components/MultiTimeframeView";
 import ControlPanel from "@/components/ControlPanel";
 import OrderPanel from "@/components/OrderPanel";
 import SessionSetup from "@/components/SessionSetup";
@@ -14,7 +14,6 @@ import MarketContextBar from "@/components/MarketContextBar";
 import SessionScoreCard from "@/components/SessionScoreCard";
 import SetupStats from "@/components/SetupStats";
 import OrderFlowPanel from "@/components/OrderFlowPanel";
-import PreSessionModal from "@/components/PreSessionModal";
 import PostSessionModal from "@/components/PostSessionModal";
 import PerformanceTracker from "@/components/PerformanceTracker";
 import SessionExport from "@/components/SessionExport";
@@ -25,13 +24,7 @@ export default function Home() {
   const isSessionActive = useSimulationStore((s) => s.candles.length > 0);
   const tradeCount = useSimulationStore((s) => s.trades.length);
   const isPendingExecution = useSimulationStore((s) => s.isPendingExecution);
-  const isStudyPhase = useSimulationStore((s) => s.isStudyPhase);
-  const goLive = useSimulationStore((s) => s.goLive);
-  const contextInterval = useSimulationStore((s) => s.contextInterval);
-  const tradingInterval = useSimulationStore((s) => s.date);
-  const showPreSession = useSimulationStore((s) => s.showPreSession);
   const showPostSession = useSimulationStore((s) => s.showPostSession);
-  const submitPreSession = useSimulationStore((s) => s.submitPreSession);
   const trades = useSimulationStore((s) => s.trades);
 
   // Record session performance before clearing state
@@ -103,38 +96,12 @@ export default function Home() {
           </div>
         ) : (
           <div className="space-y-4">
-            {/* Study Phase Banner */}
-            {isStudyPhase && (
-              <div className="bg-indigo-900/40 border border-indigo-500/50 rounded-lg p-4">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="text-indigo-200 font-semibold text-sm flex items-center gap-2">
-                      📖 Study Phase — {contextInterval === "1d" ? "Daily" : contextInterval === "1h" ? "Hourly" : contextInterval ? `${contextInterval} ` : ""}Chart Context
-                    </h3>
-                    <p className="text-indigo-300/70 text-xs mt-1">
-                      {contextInterval && contextInterval !== tradingInterval
-                        ? `You're viewing ${contextInterval === "1d" ? "daily" : contextInterval === "1h" ? "hourly" : contextInterval} candles for trend context. When you go live, the chart switches to ${tradingInterval} candles for trading.`
-                        : "Scroll through prior price action for context. When you go live, the chart continues forward with new candles."}
-                      {" "}No trading allowed yet — when ready, go live.
-                    </p>
-                  </div>
-                  <button
-                    onClick={goLive}
-                    className="bg-green-600 hover:bg-green-500 text-white px-5 py-2 rounded-lg font-bold transition-colors whitespace-nowrap"
-                  >
-                    🚀 Go Live
-                  </button>
-                </div>
-              </div>
-            )}
-
             {/* Session info bar */}
             <div className="flex items-center gap-4 text-sm">
               <span className="bg-slate-700 px-3 py-1 rounded font-mono font-bold">
                 {symbol}
               </span>
-              {!isStudyPhase && <span className="text-slate-400">{tradeCount} trades</span>}
-              {isStudyPhase && <span className="text-indigo-400 text-xs">📖 Study Mode</span>}
+              <span className="text-slate-400">{tradeCount} trades</span>
               {isPendingExecution && (
                 <span className="text-yellow-400 text-xs animate-pulse">
                   ⏳ Executing...
@@ -159,7 +126,7 @@ export default function Home() {
             <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
               {/* Chart + Controls */}
               <div className="lg:col-span-3 space-y-4">
-                <ChartWithIndicators />
+                <MultiTimeframeView />
                 <ControlPanel />
                 <TradeHistory />
                 <SetupStats />
@@ -177,11 +144,6 @@ export default function Home() {
           </div>
         )}
       </div>
-
-      {/* Pre-Session Reflection Modal */}
-      {showPreSession && (
-        <PreSessionModal onSubmit={submitPreSession} />
-      )}
 
       {/* Post-Session Reflection Modal */}
       {showPostSession && (

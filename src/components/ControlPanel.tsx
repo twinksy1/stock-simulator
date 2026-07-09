@@ -7,10 +7,8 @@ import type { PlaybackSpeed } from "@/types/market";
 const SPEEDS: PlaybackSpeed[] = [1, 2, 5, 10];
 
 export default function ControlPanel() {
-  const { isPlaying, speed, currentIndex, candles, play, pause, setSpeed, jumpTo, tick, isStudyPhase, contextEndIndex, microNoiseEnabled, microTicksPerCandle, activeView, altViews, setView, date: tradingInterval } =
+  const { isPlaying, speed, currentIndex, candles, play, pause, setSpeed, tick, microNoiseEnabled, microTicksPerCandle, tradingStartOffset } =
     useSimulationStore();
-
-  const hasAltView = altViews.length > 0 && !isStudyPhase;
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -31,7 +29,9 @@ export default function ControlPanel() {
     };
   }, [isPlaying, speed, tick, microNoiseEnabled, microTicksPerCandle]);
 
-  const progress = candles.length > 0 ? (currentIndex / (candles.length - 1)) * 100 : 0;
+  const liveTotal = Math.max(1, candles.length - 1 - tradingStartOffset);
+  const liveElapsed = Math.max(0, currentIndex - tradingStartOffset);
+  const progress = candles.length > 0 ? Math.min(100, (liveElapsed / liveTotal) * 100) : 0;
 
   // Determine current time and session context
   const currentCandle = candles[currentIndex];
@@ -63,10 +63,10 @@ export default function ControlPanel() {
         {/* Play/Pause */}
         <button
           onClick={() => (isPlaying ? pause() : play())}
-          disabled={candles.length === 0 || isStudyPhase}
+          disabled={candles.length === 0}
           className="bg-blue-600 hover:bg-blue-500 disabled:bg-slate-600 text-white px-4 py-2 rounded font-semibold transition-colors"
         >
-          {isStudyPhase ? "📖 Study" : isPlaying ? "⏸ Pause" : "▶ Play"}
+          {isPlaying ? "⏸ Pause" : "▶ Play"}
         </button>
 
         {/* Speed buttons */}
@@ -86,34 +86,6 @@ export default function ControlPanel() {
           ))}
         </div>
 
-        {/* Timeframe view toggle (e.g. 1m base with 2m/5m views). Display-only; trading stays on the base timeframe. */}
-        {hasAltView && (
-          <div className="flex items-center gap-1">
-            <span className="text-[10px] text-slate-500 uppercase tracking-wide mr-0.5">View</span>
-            <button
-              onClick={() => setView("base")}
-              className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
-                activeView === "base" ? "bg-indigo-600 text-white" : "bg-slate-700 text-slate-300 hover:bg-slate-600"
-              }`}
-              title="Trade on this timeframe"
-            >
-              {tradingInterval}
-            </button>
-            {altViews.map((v) => (
-              <button
-                key={v.interval}
-                onClick={() => setView(v.interval)}
-                className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
-                  activeView === v.interval ? "bg-indigo-600 text-white" : "bg-slate-700 text-slate-300 hover:bg-slate-600"
-                }`}
-                title="Higher-timeframe context view (completed bars only)"
-              >
-                {v.interval}
-              </button>
-            ))}
-          </div>
-        )}
-
         {/* Current time + session info */}
         <div className="ml-auto text-right">
           <span className="text-slate-300 font-mono text-sm">{currentTime}</span>
@@ -126,23 +98,11 @@ export default function ControlPanel() {
         </div>
       </div>
 
-      {/* Time slider */}
-      <input
-        type="range"
-        min={0}
-        max={isStudyPhase ? contextEndIndex : Math.max(0, candles.length - 1)}
-        value={currentIndex}
-        onChange={(e) => jumpTo(Number(e.target.value))}
-        className="w-full accent-blue-500"
-      />
-      <div className="flex justify-between text-xs text-slate-500 mt-1">
-        <span>{isStudyPhase ? "History Start" : "Start"}</span>
-        <span>
-          {isStudyPhase
-            ? `Studying history • ${contextEndIndex} candles`
-            : `${progress.toFixed(0)}% complete • ${candles.length - contextEndIndex} live candles`}
-        </span>
-        <span>{isStudyPhase ? "Present →" : "End"}</span>
+      {/* Progress readout (no scrubber — playback is driven by Play + speed) */}
+      <div className="flex justify-between text-xs text-slate-500">
+        <span>Start</span>
+        <span>{`${progress.toFixed(0)}% complete`}</span>
+        <span>End</span>
       </div>
     </div>
   );

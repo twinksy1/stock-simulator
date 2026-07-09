@@ -29,7 +29,6 @@ function generateSessionMarkdown(): string {
     cash,
     startingCash,
     realizedPnl,
-    preSessionReflection,
     postSessionReflection,
     tradingStartOffset,
   } = sim;
@@ -44,16 +43,6 @@ function generateSessionMarkdown(): string {
   lines.push(`**Realized P&L:** ${realizedPnl >= 0 ? "+" : ""}$${realizedPnl.toFixed(2)}`);
   lines.push(`**Total Trades:** ${closedTrades.length}${position ? " (1 open)" : ""}`);
   lines.push("");
-
-  // Pre-session reflection
-  if (preSessionReflection) {
-    lines.push("## Pre-Session Plan");
-    lines.push(`- **Predicted Regime:** ${preSessionReflection.predictedRegime}`);
-    lines.push(`- **Strategy:** ${preSessionReflection.strategy}`);
-    if (preSessionReflection.entrySignals.length > 0) lines.push(`- **Entry Signals:** ${preSessionReflection.entrySignals.join(", ")}`);
-    if (preSessionReflection.avoidItems.length > 0) lines.push(`- **Avoiding:** ${preSessionReflection.avoidItems.join(", ")}`);
-    lines.push("");
-  }
 
   // Price action summary — key candles around trades
   lines.push("## Price Action (Trading Window)");

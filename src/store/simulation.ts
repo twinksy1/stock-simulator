@@ -11,7 +11,6 @@ import type {
   MistakeType,
   MarketRegime,
   SessionScore,
-  PreSessionReflection,
   PostSessionReflection,
   YahooInsights,
   AltTimeframeView,
@@ -36,23 +35,15 @@ interface SimulationState {
   regimes: { startIndex: number; regime: MarketRegime }[];
   currentPrice: number;
   pnl: number;
-  contextEndIndex: number;
-  isStudyPhase: boolean;
-  // Dual-timeframe: higher-TF context for study, separate trading candles
-  contextCandles: Candle[];
-  contextInterval: string;
-  tradingCandlesStored: Candle[];
-  tradingStartOffset: number; // Where live trading begins within tradingCandlesStored (lookback before this)
+  tradingStartOffset: number; // Where live trading begins within candles (lookback before this)
   // Micro-tick noise
   microNoiseEnabled: boolean;
   microTicksPerCandle: number;
   microTickCount: number;
   microPath: number[];
 
-  // Pre/Post session reflection
-  showPreSession: boolean;
+  // Post session reflection
   showPostSession: boolean;
-  preSessionReflection: PreSessionReflection | null;
   postSessionReflection: PostSessionReflection | null;
   sessionEnded: boolean;
 
@@ -65,23 +56,17 @@ interface SimulationState {
   // Yahoo insights for real data sessions
   yahooInsights: YahooInsights | null;
 
-  // Alt timeframe views (display-only overlays, e.g. 2m/5m views of a 1m session)
+  // Alt timeframe views (display-only higher-TF panes shown alongside the base, e.g. 2m/5m of a 1m session)
   altViews: AltTimeframeView[];
-  activeView: string; // "base" or an alt interval (e.g. "5m")
 
   loadSession: (
     symbol: string,
     date: string,
     candles: Candle[],
-    contextEndIndex?: number,
     startBalance?: number,
-    contextCandles?: Candle[],
-    contextInterval?: string,
     tradingStartOffset?: number,
     altViews?: AltTimeframeView[]
   ) => void;
-  setView: (view: string) => void;
-  goLive: () => void;
   tick: () => void;
   play: () => void;
   pause: () => void;
@@ -93,7 +78,6 @@ interface SimulationState {
   updatePlannedStop: (stop: number | undefined) => void;
   calculateMaxShares: (stopPrice: number) => number;
   setMicroNoise: (enabled: boolean, ticksPerCandle?: number) => void;
-  submitPreSession: (reflection: PreSessionReflection) => void;
   submitPostSession: (reflection: PostSessionReflection) => void;
   dismissPostSession: () => void;
   setYahooInsights: (insights: YahooInsights) => void;
@@ -130,7 +114,7 @@ function calculatePnl(state: {
 // Auto stop-loss: triggers only on candle close price
 function checkAutoStopLoss(get: () => SimulationState, set: (partial: Partial<SimulationState>) => void) {
   const s = get();
-  if (!s.position || !s.position.plannedStop || s.isStudyPhase || s.isPendingExecution) return;
+  if (!s.position || !s.position.plannedStop || s.isPendingExecution) return;
 
   // Don't execute stops outside market hours
   if (!isMarketHours(s.candles, s.currentIndex)) return;
@@ -344,80 +328,36 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
   regimes: [],
   currentPrice: 0,
   pnl: 0,
-  contextEndIndex: 0,
-  isStudyPhase: false,
-  contextCandles: [],
-  contextInterval: "",
-  tradingCandlesStored: [],
   tradingStartOffset: 0,
   microNoiseEnabled: true,
   microTicksPerCandle: 8,
   microTickCount: 0,
   microPath: [],
-  showPreSession: false,
   showPostSession: false,
-  preSessionReflection: null,
   postSessionReflection: null,
   sessionEnded: false,
   lastOrderError: null,
   yahooInsights: null,
   sessionRecorded: false,
   altViews: [],
-  activeView: "base",
 
-  loadSession: (symbol, date, candles, contextEndIndex = 0, startBalance, contextCandles, contextInterval, tradingStartOffset = 0, altViews) => {
+  loadSession: (symbol, date, candles, startBalance, tradingStartOffset = 0, altViews) => {
     const balance = startBalance ?? STARTING_CASH;
-
-    if (contextCandles && contextCandles.length > 0) {
-      // Dual-TF mode: show higher-TF context during study, store trading candles for swap on go-live
-      const startIdx = contextCandles.length - 1;
-      set({
-        symbol, date,
-        candles: contextCandles,
-        contextCandles,
-        contextInterval: contextInterval || date,
-        tradingCandlesStored: candles,
-        tradingStartOffset,
-        currentIndex: startIdx,
-        isPlaying: false, speed: 1,
-        cash: balance, startingCash: balance, position: null,
-        trades: [], closedTrades: [], realizedPnl: 0, isLockedOut: false,
-        isPendingExecution: false, regimes: [],
-        currentPrice: contextCandles[startIdx].close, pnl: 0,
-        contextEndIndex: startIdx,
-        isStudyPhase: true,
-        yahooInsights: null,
-        sessionRecorded: false,
-        altViews: altViews ?? [],
-        activeView: "base",
-      });
-    } else {
-      // Single-TF mode (1d or fallback): study + trading on same candle series
-      const startIndex = contextEndIndex > 0 ? contextEndIndex : Math.min(50, Math.max(0, candles.length - 1));
-      set({
-        symbol, date, candles,
-        contextCandles: [],
-        contextInterval: "",
-        tradingCandlesStored: [],
-        tradingStartOffset: 0,
-        currentIndex: startIndex, isPlaying: false, speed: 1,
-        cash: balance, startingCash: balance, position: null,
-        trades: [], closedTrades: [], realizedPnl: 0, isLockedOut: false,
-        isPendingExecution: false, regimes: [],
-        currentPrice: candles.length > 0 ? candles[startIndex]?.close ?? candles[0].close : 0, pnl: 0,
-        contextEndIndex: startIndex,
-        isStudyPhase: contextEndIndex > 0,
-        yahooInsights: null,
-        sessionRecorded: false,
-        altViews: altViews ?? [],
-        activeView: "base",
-      });
-    }
-  },
-
-  goLive: () => {
-    // Show pre-session reflection popup (simulation stays paused)
-    set({ showPreSession: true, isPlaying: false });
+    // Start paused at the live-trading candle. Lookback candles [0..offset) stay
+    // visible so the user can scroll back for recent context.
+    const startIndex = Math.min(tradingStartOffset, Math.max(0, candles.length - 1));
+    set({
+      symbol, date, candles,
+      tradingStartOffset,
+      currentIndex: startIndex, isPlaying: false, speed: 1,
+      cash: balance, startingCash: balance, position: null,
+      trades: [], closedTrades: [], realizedPnl: 0, isLockedOut: false,
+      isPendingExecution: false, regimes: [],
+      currentPrice: candles.length > 0 ? candles[startIndex]?.close ?? candles[0].close : 0, pnl: 0,
+      yahooInsights: null,
+      sessionRecorded: false,
+      altViews: altViews ?? [],
+    });
   },
 
   tick: () => {
@@ -475,23 +415,20 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
     }
   },
 
-  play: () => { const s = get(); if (!s.isStudyPhase && !s.showPreSession && !s.showPostSession) set({ isPlaying: true }); },
+  play: () => { const s = get(); if (!s.showPostSession) set({ isPlaying: true }); },
   pause: () => set({ isPlaying: false }),
   setSpeed: (speed) => set({ speed }),
 
   jumpTo: (index) => {
-    const { candles, isStudyPhase, contextEndIndex } = get();
-    // During study phase, can only scroll within context history
-    const maxIndex = isStudyPhase ? contextEndIndex : candles.length - 1;
-    const clamped = Math.max(0, Math.min(index, maxIndex));
+    const { candles } = get();
+    const clamped = Math.max(0, Math.min(index, candles.length - 1));
     const price = candles[clamped].close;
     const s = get();
     set({ currentIndex: clamped, currentPrice: price, pnl: calculatePnl({ cash: s.cash, startingCash: s.startingCash, position: s.position, currentPrice: price }) });
   },
 
   buy: (quantity, plannedStop?, journal?) => {
-    const { cash, isLockedOut, riskSettings, closedTrades, currentIndex, isStudyPhase, candles } = get();
-    if (isStudyPhase) { set({ lastOrderError: "Cannot trade during study phase" }); return false; }
+    const { cash, isLockedOut, riskSettings, closedTrades, currentIndex, candles } = get();
     if (isLockedOut) { set({ lastOrderError: "Locked out — daily loss limit reached" }); return false; }
     if (!isMarketHours(candles, currentIndex)) { set({ lastOrderError: "Market closed — wait for 9:30 AM ET" }); return false; }
 
@@ -551,8 +488,7 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
   },
 
   sell: (quantity, journal?) => {
-    const { position, riskSettings, trades, currentIndex, isStudyPhase, candles } = get();
-    if (isStudyPhase) { set({ lastOrderError: "Cannot trade during study phase" }); return false; }
+    const { position, riskSettings, trades, currentIndex, candles } = get();
     if (!isMarketHours(candles, currentIndex)) { set({ lastOrderError: "Market closed — wait for 9:30 AM ET" }); return false; }
     if (!position || position.quantity < quantity) { set({ lastOrderError: "No position to sell" }); return false; }
 
@@ -627,28 +563,6 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
     return Math.min(Math.floor(maxRiskDollars / (realPrice - stopPrice)), Math.floor(cash / realPrice));
   },
   setMicroNoise: (enabled, ticksPerCandle?) => set({ microNoiseEnabled: enabled, microTicksPerCandle: ticksPerCandle ?? get().microTicksPerCandle, microTickCount: 0, microPath: [] }),
-  submitPreSession: (reflection) => {
-    const { tradingCandlesStored, tradingStartOffset } = get();
-    if (tradingCandlesStored.length > 0) {
-      // Dual-TF: swap chart to trading-interval candles
-      // Lookback candles [0..offset) are already visible; live trading starts at offset
-      const startIdx = tradingStartOffset;
-      set({
-        candles: tradingCandlesStored,
-        currentIndex: startIdx,
-        currentPrice: tradingCandlesStored[startIdx]?.close ?? tradingCandlesStored[0].close,
-        contextEndIndex: 0,
-        isStudyPhase: false,
-        showPreSession: false,
-        preSessionReflection: reflection,
-        tradingCandlesStored: [],
-        contextCandles: [],
-      });
-    } else {
-      // Single-TF: just lift study phase restriction
-      set({ preSessionReflection: reflection, showPreSession: false, isStudyPhase: false });
-    }
-  },
   submitPostSession: (reflection) => {
     set({ postSessionReflection: reflection, showPostSession: false });
   },
@@ -657,16 +571,9 @@ export const useSimulationStore = create<SimulationState>()(persist((set, get) =
   },
   setYahooInsights: (insights) => set({ yahooInsights: insights }),
   markSessionRecorded: () => set({ sessionRecorded: true }),
-  setView: (view) => {
-    const s = get();
-    if (s.isStudyPhase) return;
-    if (view === "base" || s.altViews.some((v) => v.interval === view)) {
-      set({ activeView: view });
-    }
-  },
   getSessionScore: () => { const { trades, closedTrades, currentIndex } = get(); return calculateSessionScore(trades, closedTrades, currentIndex); },
   getCurrentRegime: () => { const { regimes, currentIndex, yahooInsights } = get(); if (regimes.length === 0) return yahooInsights?.regime ?? "choppy"; return regimes.reduce((c, r) => r.startIndex <= currentIndex ? r : c, regimes[0]).regime; },
-  reset: () => set({ symbol: "", date: "", candles: [], currentIndex: 0, isPlaying: false, speed: 1, cash: STARTING_CASH, startingCash: STARTING_CASH, position: null, trades: [], closedTrades: [], realizedPnl: 0, isLockedOut: false, isPendingExecution: false, regimes: [], currentPrice: 0, pnl: 0, contextEndIndex: 0, isStudyPhase: false, contextCandles: [], contextInterval: "", tradingCandlesStored: [], tradingStartOffset: 0, microTickCount: 0, microPath: [], showPreSession: false, showPostSession: false, preSessionReflection: null, postSessionReflection: null, sessionEnded: false, lastOrderError: null, yahooInsights: null, sessionRecorded: false, altViews: [], activeView: "base" }),
+  reset: () => set({ symbol: "", date: "", candles: [], currentIndex: 0, isPlaying: false, speed: 1, cash: STARTING_CASH, startingCash: STARTING_CASH, position: null, trades: [], closedTrades: [], realizedPnl: 0, isLockedOut: false, isPendingExecution: false, regimes: [], currentPrice: 0, pnl: 0, tradingStartOffset: 0, microTickCount: 0, microPath: [], showPostSession: false, postSessionReflection: null, sessionEnded: false, lastOrderError: null, yahooInsights: null, sessionRecorded: false, altViews: [] }),
 }), {
   name: "stock-sim-settings",
   partialize: (state) => ({

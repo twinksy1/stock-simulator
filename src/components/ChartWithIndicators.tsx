@@ -86,7 +86,13 @@ function detectDrops(candles: Candle[], upToIndex: number): { index: number; pct
   return drops;
 }
 
-export default function ChartWithIndicators() {
+export default function ChartWithIndicators({
+  viewInterval = "base",
+  compact = false,
+}: {
+  viewInterval?: string;
+  compact?: boolean;
+} = {}) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const rsiContainerRef = useRef<HTMLDivElement>(null);
   const macdContainerRef = useRef<HTMLDivElement>(null);
@@ -111,8 +117,10 @@ export default function ChartWithIndicators() {
   const candles = useSimulationStore((s) => s.candles);
   const currentIndex = useSimulationStore((s) => s.currentIndex);
   const currentPrice = useSimulationStore((s) => s.currentPrice);
-  const activeView = useSimulationStore((s) => s.activeView);
   const altViews = useSimulationStore((s) => s.altViews);
+
+  // Which series this pane renders: "base" (the traded series) or an alt interval.
+  const activeView = viewInterval;
 
   // Display series: in an alt view show the higher-TF candles up to the last
   // COMPLETED bar at the current base-timeframe market time (lookahead-safe).
@@ -135,6 +143,9 @@ export default function ChartWithIndicators() {
   }, [activeView, altViews, candles, currentIndex]);
 
   const { showVolume, showRSI, showMACD, showBollingerBands, showVWAP, showDropPercent, movingAverages } = useIndicatorStore();
+  // Compact alt-context panes suppress the sub-charts to stay short and readable.
+  const effShowRSI = compact ? false : showRSI;
+  const effShowMACD = compact ? false : showMACD;
   const enabledMAs = useMemo(
     () => movingAverages.filter((ma) => ma.enabled),
     [movingAverages]
@@ -174,7 +185,7 @@ export default function ChartWithIndicators() {
     const mainChart = createChart(chartContainerRef.current, {
       ...commonOptions,
       width: chartContainerRef.current.clientWidth,
-      height: 320,
+      height: compact ? 200 : 340,
     });
 
     const candleSeries = mainChart.addSeries(CandlestickSeries, {
@@ -301,7 +312,7 @@ export default function ChartWithIndicators() {
       macdChart.remove();
       maSeriesMapRef.current.clear();
     };
-  }, []);
+  }, [compact]);
 
   // Manage MA line series dynamically (add/remove as toggles change)
   useEffect(() => {
@@ -339,7 +350,7 @@ export default function ChartWithIndicators() {
   const lastDisplayCandlesRef = useRef<Candle[] | null>(null);
 
   // Build a toggle key to detect when indicators change (requires full redraw)
-  const toggleKey = `${showVolume}-${showRSI}-${showMACD}-${showBollingerBands}-${showVWAP}-${showDropPercent}-${enabledMAs.map(m => m.id).join(",")}`;
+  const toggleKey = `${showVolume}-${effShowRSI}-${effShowMACD}-${showBollingerBands}-${showVWAP}-${showDropPercent}-${enabledMAs.map(m => m.id).join(",")}`;
 
   // Update chart data — incremental when just ticking forward, full redraw on jumps/toggles
   useEffect(() => {
@@ -383,12 +394,12 @@ export default function ChartWithIndicators() {
         if (bb.lower[displayIndex] !== null) bbLowerRef.current?.update({ time: t, value: bb.lower[displayIndex]! });
       }
 
-      if (showRSI) {
+      if (effShowRSI) {
         const val = indicators.rsi[displayIndex];
         if (val !== null) rsiSeriesRef.current?.update({ time: t, value: val });
       }
 
-      if (showMACD) {
+      if (effShowMACD) {
         const m = indicators.macd[displayIndex];
         if (m.macd !== null) macdLineRef.current?.update({ time: t, value: m.macd });
         if (m.signal !== null) signalLineRef.current?.update({ time: t, value: m.signal });
@@ -466,7 +477,7 @@ export default function ChartWithIndicators() {
         bbLowerRef.current?.setData([]);
       }
 
-      if (showRSI) {
+      if (effShowRSI) {
         rsiSeriesRef.current?.setData(
           indicators.rsi.slice(0, slice).reduce<{ time: Time; value: number }[]>((acc, val, i) => {
             if (val !== null) acc.push({ time: displayCandles[i].time as Time, value: val }); return acc;
@@ -474,7 +485,7 @@ export default function ChartWithIndicators() {
         );
       } else { rsiSeriesRef.current?.setData([]); }
 
-      if (showMACD) {
+      if (effShowMACD) {
         const macdData: { time: Time; value: number }[] = [];
         const signalData: { time: Time; value: number }[] = [];
         const histData: { time: Time; value: number; color: string }[] = [];
@@ -517,7 +528,7 @@ export default function ChartWithIndicators() {
     lastRenderedIndexRef.current = displayIndex;
     lastIndicatorTogglesRef.current = toggleKey;
     lastDisplayCandlesRef.current = displayCandles;
-  }, [displayCandles, displayIndex, indicators, showVolume, showRSI, showMACD, showBollingerBands, showVWAP, showDropPercent, enabledMAs, toggleKey]);
+  }, [displayCandles, displayIndex, indicators, showVolume, effShowRSI, effShowMACD, showBollingerBands, showVWAP, showDropPercent, enabledMAs, toggleKey]);
 
   // Current candle info bar (reflects the displayed series)
   const currentCandle = displayCandles[displayIndex] ?? null;
@@ -526,7 +537,7 @@ export default function ChartWithIndicators() {
   return (
     <div className="space-y-1">
       {/* OHLCV info bar */}
-      {currentCandle && (
+      {currentCandle && !compact && (
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs font-mono px-2 py-1.5 bg-slate-800 rounded border border-slate-700">
           <span className="text-slate-400">
             O <span className="text-white">{currentCandle.open.toFixed(2)}</span>
@@ -550,7 +561,7 @@ export default function ChartWithIndicators() {
           <span className="text-slate-400">
             Vol <span className="text-yellow-300">{currentCandle.volume.toLocaleString()}</span>
           </span>
-          {showRSI && currentRSI !== null && (
+          {effShowRSI && currentRSI !== null && (
             <span className="text-slate-400">
               RSI <span className="text-cyan-400">{currentRSI.toFixed(1)}</span>
             </span>
@@ -565,7 +576,7 @@ export default function ChartWithIndicators() {
       />
 
       {/* RSI */}
-      <div className="relative" style={{ display: showRSI ? "block" : "none" }}>
+      <div className="relative" style={{ display: effShowRSI ? "block" : "none" }}>
         <span className="absolute top-1 left-2 text-[10px] text-cyan-400 font-mono z-10">
           RSI (14)
         </span>
@@ -573,7 +584,7 @@ export default function ChartWithIndicators() {
       </div>
 
       {/* MACD */}
-      <div className="relative" style={{ display: showMACD ? "block" : "none" }}>
+      <div className="relative" style={{ display: effShowMACD ? "block" : "none" }}>
         <span className="absolute top-1 left-2 text-[10px] text-blue-400 font-mono z-10">
           MACD (12,26,9)
         </span>
@@ -584,7 +595,7 @@ export default function ChartWithIndicators() {
       </div>
 
       {/* Legend for enabled MAs */}
-      {enabledMAs.length > 0 && (
+      {enabledMAs.length > 0 && !compact && (
         <div className="flex gap-4 text-[11px] text-slate-400 px-1 pt-1">
           {enabledMAs.map((ma) => (
             <span key={ma.id}>

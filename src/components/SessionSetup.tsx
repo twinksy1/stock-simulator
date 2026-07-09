@@ -21,27 +21,8 @@ const MAX_RANGE: Record<Interval, string> = {
   "1d": "10y",
 };
 
-// Higher-TF context to show during study phase (decoupled from trading interval)
-// For intraday intervals, we show hourly or daily candles for trend context.
-// For daily, we use the same data (single-TF mode).
-interface ContextConfig {
-  interval: Interval;
-  range: string;
-  maxCandles: number; // How many context candles to show
-}
-
-const CONTEXT_CONFIG: Record<Interval, ContextConfig | null> = {
-  "1m":  { interval: "1h", range: "720d", maxCandles: 120 }, // ~4 months of hourly
-  "2m":  { interval: "1h", range: "720d", maxCandles: 120 },
-  "5m":  { interval: "1h", range: "720d", maxCandles: 120 },
-  "15m": { interval: "1d", range: "10y",  maxCandles: 120 }, // ~6 months of daily
-  "30m": { interval: "1d", range: "10y",  maxCandles: 120 },
-  "1h":  { interval: "1d", range: "10y",  maxCandles: 120 },
-  "1d":  null, // No higher TF — use single-TF mode
-};
-
-// Higher-timeframe display overlays offered per base interval (display-only;
-// trading stays anchored to the base interval). Intraday-only, within the ~7d window.
+// Higher-timeframe context panes shown per base interval (display-only; trading
+// stays anchored to the base interval). Rendered side-by-side with the base chart.
 const ALT_VIEW_INTERVALS: Partial<Record<Interval, Interval[]>> = {
   "1m": ["2m", "5m"],
   "2m": ["5m"],
@@ -87,7 +68,7 @@ const DIFFICULTY_CANDLES: Record<Interval, Record<Exclude<Difficulty, "custom">,
     beginner:     { min: 60,  max: 195,  label: "2 hrs – 1 day" },
     intermediate: { min: 195, max: 390,  label: "1–2 days" },
     advanced:     { min: 585, max: 975,  label: "3–5 days (random)" },
-    expert:       { min: 1170, max: 1755, label: "Full week (random)" },
+    expert:       { min: 1950, max: 2340, label: "10–12 days (random)" },
   },
   "5m": {
     beginner:     { min: 36,   max: 78,   label: "Half – full day" },
@@ -320,12 +301,11 @@ export default function SessionSetup() {
     return range.min + Math.floor(Math.random() * (range.max - range.min + 1));
   };
 
-  // Fetch trading data, then higher-TF context (sequential to avoid Yahoo rate limits)
+  // Fetch trading data, then higher-TF context panes (sequential to avoid Yahoo rate limits)
   const startSession = async (targetSymbol: string) => {
     setLoading(true);
     setError(null);
     try {
-      const ctxConfig = CONTEXT_CONFIG[interval];
       const maxRange = MAX_RANGE[interval];
 
       // 1. Fetch trading data first
@@ -362,44 +342,16 @@ export default function SessionSetup() {
 
       saveRecentWindow({ symbol: targetSymbol, interval, startIndex: sliceStart, windowSize: tradingSlice.length, timestamp: Date.now() });
 
-      // 3. Fetch higher-TF context (sequential — after trading fetch to avoid Yahoo rate limits)
-      let contextSlice: Candle[] = [];
-      let contextIntervalUsed = "";
-
-      if (ctxConfig) {
-        try {
-          const contextRes = await fetch(`/api/data/historical?symbol=${targetSymbol}&interval=${ctxConfig.interval}&range=${ctxConfig.range}`);
-          if (contextRes.ok) {
-            const contextData = await contextRes.json();
-            const allContextCandles: Candle[] = contextData.candles;
-            const tradingStartTime = tradingSlice[0].time;
-            const contextBefore = allContextCandles.filter((c) => c.time < tradingStartTime);
-            contextSlice = contextBefore.slice(-ctxConfig.maxCandles);
-            contextIntervalUsed = ctxConfig.interval;
-          }
-        } catch {
-          // Context fetch failed — will use fallback below
-        }
-      }
-
-      // 4. Fallback: if higher-TF context failed, use same-interval candles BEFORE the trading window
-      //    This doesn't eat into the trading window — it's data we already fetched but isn't in the slice
-      if (contextSlice.length <= 10 && sliceStart > 0) {
-        const beforeTrading = allTradingCandles.slice(0, sliceStart);
-        contextSlice = beforeTrading.slice(-Math.min(200, beforeTrading.length));
-        contextIntervalUsed = interval;
-      }
-
-      // 5. Prepend same-interval lookback to trading data (visible when going live)
-      //    This lets users scroll back to see recent price action at the trading interval
+      // 3. Prepend same-interval lookback to trading data (visible when the session starts).
+      //    This lets users scroll back to see recent price action at the trading interval.
       const lookbackCount = Math.min(sliceStart, 200);
       const lookback = lookbackCount > 0 ? allTradingCandles.slice(sliceStart - lookbackCount, sliceStart) : [];
       const fullTradingData = [...lookback, ...tradingSlice];
       const tradingStartOffset = lookback.length;
 
-      // 5b. Alt-timeframe overlays: fetch higher-TF series spanning the same window.
-      //     Display-only views (trading stays anchored to the base timeline).
-      //     1m sessions get 2m + 5m views; 2m sessions get a 5m view.
+      // 4. Alt-timeframe context panes: fetch higher-TF series spanning the same window.
+      //    Display-only (trading stays anchored to the base timeline), shown side-by-side.
+      //    1m sessions get 2m + 5m panes; 2m sessions get a 5m pane.
       const altViews: AltTimeframeView[] = [];
       const altIntervals = ALT_VIEW_INTERVALS[interval] ?? [];
       const firstTime = fullTradingData[0].time;
@@ -414,17 +366,12 @@ export default function SessionSetup() {
             if (windowCandles.length > 0) altViews.push({ interval: altInt, candles: windowCandles });
           }
         } catch {
-          // Alt overlays are optional — session works without them
+          // Alt panes are optional — session works without them
         }
       }
 
-      // 6. Load session
-      if (contextSlice.length > 10) {
-        loadSession(targetSymbol, interval, fullTradingData, 0, startBalance, contextSlice, contextIntervalUsed, tradingStartOffset, altViews);
-      } else {
-        // No higher-TF context — start directly with trading data (lookback is still prepended)
-        loadSession(targetSymbol, interval, fullTradingData, tradingStartOffset, startBalance, undefined, undefined, undefined, altViews);
-      }
+      // 5. Load session (starts paused at the live candle; lookback stays scroll-back visible)
+      loadSession(targetSymbol, interval, fullTradingData, startBalance, tradingStartOffset, altViews);
 
       fetchAndApplyInsights(targetSymbol);
     } catch (err: unknown) {
@@ -577,17 +524,12 @@ export default function SessionSetup() {
         <div className="bg-slate-900/60 rounded-lg p-3 border border-slate-700/50">
           <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1.5">How it works</div>
           <div className="space-y-1 text-[11px] text-slate-400">
-            {CONTEXT_CONFIG[interval] ? (
-              <>
-                <p>📖 <span className="text-slate-300">Study phase</span> — You&apos;ll see {CONTEXT_CONFIG[interval]!.interval === "1h" ? "hourly" : "daily"} candles for trend context before the trading window.</p>
-                <p>🚀 <span className="text-slate-300">Go live</span> — Chart switches to {intervalOption.label} candles. Trade as price plays forward.</p>
-              </>
+            {(ALT_VIEW_INTERVALS[interval]?.length ?? 0) > 0 ? (
+              <p>📊 <span className="text-slate-300">Multi-timeframe</span> — {intervalOption.label} base chart with {ALT_VIEW_INTERVALS[interval]!.join(" & ")} context panes shown side-by-side.</p>
             ) : (
-              <>
-                <p>📖 <span className="text-slate-300">Study phase</span> — Analyze the first portion of the chart for context.</p>
-                <p>🚀 <span className="text-slate-300">Go live</span> — Trade as candles play forward one at a time.</p>
-              </>
+              <p>📊 <span className="text-slate-300">{intervalOption.label} chart</span> — Trade as candles play forward one at a time.</p>
             )}
+            <p>⏸️ <span className="text-slate-300">Starts paused</span> — Press play when you&apos;re ready. Scroll back for recent price action.</p>
             <p>🎲 <span className="text-slate-300">Blind dates</span> — Random time period. No hindsight bias.</p>
             <p>🔒 <span className="text-slate-300">Anti-repeat</span> — Recent sessions are tracked to avoid immediate replays.</p>
           </div>
